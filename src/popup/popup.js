@@ -183,7 +183,7 @@ function teachSection(s) {
   const nodes = [];
   if (!s.teach) {
     nodes.push(
-      el("p", { textContent: "Open episode 1 of any show on this site, then click this." }),
+      el("p", { textContent: "Is this an anime site? Open episode 1 of any anime here, then click this." }),
       button(
         "This is episode 1",
         () => act(() => send({ type: "teachStart", url: tabUrl, title: tabTitle })),
@@ -192,7 +192,7 @@ function teachSection(s) {
     );
   } else {
     nodes.push(
-      el("p", { textContent: "Now open episode 2 of the same show and click this." }),
+      el("p", { textContent: "Now open episode 2 of the same anime and click this." }),
       button(
         "This is episode 2",
         async () => {
@@ -231,7 +231,7 @@ function renderLearned() {
 
 function renderUntracked(s) {
   if (!/^https?:/i.test(tabUrl)) {
-    return [el("p", { textContent: "This page isn't a tracked episode page." })];
+    return [el("p", { textContent: "NextEp keeps track of the anime episodes you watch. There's nothing to track on this page." })];
   }
   const nodes = [];
   if (s.hostHasRule) {
@@ -240,8 +240,8 @@ function renderUntracked(s) {
     nodes.push(
       el("p", {
         textContent: s.generic
-          ? "This site isn't enabled yet."
-          : "This page isn't a tracked episode page.",
+          ? "This looks like an anime episode page, but this site isn't enabled yet."
+          : "NextEp keeps track of the anime episodes you watch. I don't know this site yet.",
       }),
     );
   }

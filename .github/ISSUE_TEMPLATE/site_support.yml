@@ -15,7 +15,7 @@ body:
     id: notes
     attributes:
       label: What happens instead?
-      description: For example, the popup says "This page isn't a tracked episode page." or the wrong anime is matched.
+      description: For example, the popup says it doesn't know the site or the wrong anime is matched.
   - type: input
     id: firefox-version
     attributes:
