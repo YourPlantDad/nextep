@@ -22,32 +22,49 @@ const store = createStore();
 const auth = createAuth({ store });
 const api = createApi({ tokens: auth });
 
-// Tries with the icon first. If that is rejected, tries once more without it.
-async function createNotification(message) {
-  const options = { type: "basic", title: "NextEp", message };
-  try {
-    await browser.notifications.create({
-      ...options,
-      iconUrl: browser.runtime.getURL("icons/icon.svg"),
-    });
-  } catch (e) {
-    console.error("NextEp: notification with icon failed:", e);
-    await browser.notifications.create(options);
-  }
+// Opens the popup for a moment after an automatic step, if that's on and it can work. Every
+// failure is ignored: older Firefox rejects the call, and so does a window that isn't focused
+// or is fullscreen.
+async function showRecorded(event) {
+  const { context } = event;
+  if (!context?.tabId || typeof browser.browserAction.openPopup !== "function") return;
+  const { openOnRecord } = await store.getSettings();
+  if (openOnRecord === false) return;
+  const [tab, window] = await Promise.all([
+    browser.tabs.get(context.tabId),
+    browser.windows.get(context.windowId),
+  ]);
+  if (!tab.active || !window.focused) return;
+  await store.setJustRecorded({
+    key: event.key,
+    count: event.count,
+    total: event.total,
+    title: event.title,
+    completed: event.completed,
+    at: Date.now(),
+  });
+  await browser.browserAction.openPopup({ windowId: context.windowId });
 }
 
-async function notify(message) {
-  // Must never throw. By now the caller has already written to storage or MAL.
-  try {
-    const { notifications } = await store.getSettings();
-    if (notifications === false) return;
-    await createNotification(message);
-  } catch (e) {
-    console.error("NextEp: notification failed:", e);
-  }
+// Only a recorded step shows anything. The other events are already visible as the badge.
+function onTrackerEvent(event) {
+  if (event.type !== "recorded") return;
+  // Not awaited. The popup's own requests go through the same queue as this call.
+  showRecorded(event).catch(() => {});
 }
 
-const tracker = createTracker({ store, api, notify });
+const tracker = createTracker({ store, api, emit: onTrackerEvent });
+
+const RECORDED_GREEN = "#2e9e5b";
+
+async function setBadge(tabId, text) {
+  await browser.browserAction.setBadgeText({ tabId, text });
+  // null puts the default colour back for this tab.
+  await browser.browserAction.setBadgeBackgroundColor({
+    tabId,
+    color: text === "✓" ? RECORDED_GREEN : null,
+  });
+}
 
 async function updateBadge(tabId, tab) {
   const { sites } = await store.getSettings();
@@ -56,7 +73,7 @@ async function updateBadge(tabId, tab) {
   const mapping = parsed && signedIn ? ((await store.getMapping(parsed.key)) ?? null) : null;
   const { episode } = pickEpisode(parsed, mapping?.numEpisodes ?? 0);
   const text = badgeText({ signedIn, parsed, mapping, episode });
-  await browser.browserAction.setBadgeText({ tabId, text });
+  await setBadge(tabId, text);
 }
 
 async function refreshActiveBadge() {
@@ -72,7 +89,9 @@ browser.tabs.onUpdated.addListener(
       const parsed = parseTab(tab, sites);
       const trigger = visitTrigger(parsed, changeInfo);
       // Pages with no episode source are only matched when the popup opens.
-      if (trigger && parsed.source !== "none") await tracker.handleVisit(parsed, trigger);
+      if (trigger && parsed.source !== "none") {
+        await tracker.handleVisit(parsed, trigger, { tabId, windowId: tab.windowId });
+      }
     } catch (e) {
       console.error("NextEp:", e);
     }
@@ -136,7 +155,7 @@ const handlers = {
     if (!Number.isInteger(episodes)) throw new Error("Episode count must be a whole number.");
     const mapping = await store.getMapping(key);
     if (!mapping?.malId) throw new Error("No anime selected for this show.");
-    // The popup shows the result, so no desktop notification.
+    // The popup shows the result.
     const result = await tracker.applyProgress(mapping.malId, episodes, {
       force: force === true,
       silent: true,
@@ -147,8 +166,14 @@ const handlers = {
 
   async setStatus({ key, status }) {
     if (!LIST_STATUSES.includes(status)) throw new Error("That isn't a list status.");
-    // The popup shows the result, so no desktop notification.
+    // The popup shows the result.
     return { result: await tracker.setStatus(key, status) };
+  },
+
+  async removeFromList({ key }) {
+    // The popup shows the result.
+    await tracker.removeFromList(key);
+    return {};
   },
 
   async resume({ key, episode }) {
@@ -197,7 +222,7 @@ const handlers = {
 
   async teachStart({ url, title }) {
     const page = toHttpUrl(url);
-    if (!page) throw new Error("I can only learn from http or https pages.");
+    if (!page) throw new Error("This only works on http or https pages.");
     await store.setTeach({ host: siteHost(page), url, title: String(title ?? ""), at: Date.now() });
     return {};
   },
@@ -247,13 +272,8 @@ const handlers = {
     return { signedIn, name: signedIn ? await auth.getUserName() : null };
   },
 
-  async testNotification() {
-    try {
-      await createNotification("This is a test notification from NextEp.");
-      return { sent: true };
-    } catch (e) {
-      return { sent: false, error: e?.message ?? String(e) };
-    }
+  async takeJustRecorded() {
+    return { recorded: await store.takeJustRecorded() };
   },
 
   async getSettings() {
@@ -282,7 +302,7 @@ const handlers = {
     const next = {
       clientId: String(settings.clientId ?? "").trim(),
       clientSecret: String(settings.clientSecret ?? "").trim(),
-      notifications: settings.notifications !== false,
+      openOnRecord: settings.openOnRecord !== false,
       sites,
     };
     await store.saveSettings(next);
@@ -303,7 +323,7 @@ const handlers = {
   },
 };
 
-const mutating = new Set(["selectMapping", "setWatched", "setStatus", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+const mutating = new Set(["selectMapping", "setWatched", "setStatus", "removeFromList", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
 
 browser.runtime.onMessage.addListener(async (message) => {
   try {

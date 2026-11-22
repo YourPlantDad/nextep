@@ -3,7 +3,7 @@ import { DEFAULT_RULES } from "./url-parser.js";
 export const DEFAULT_SETTINGS = {
   clientId: "",
   clientSecret: "",
-  notifications: true,
+  openOnRecord: true,
   sites: DEFAULT_RULES,
 };
 
@@ -39,6 +39,12 @@ export function createStore(area) {
     setMapping: (key, mapping) => writeMap("mappings", key, mapping),
     getLastSeen: (key) => readMap("lastSeen", key),
     setLastSeen: (key, value) => writeMap("lastSeen", key, value),
+    async takeJustRecorded() {
+      const value = (await read("justRecorded")) ?? null;
+      if (value) await storage().remove("justRecorded");
+      return value;
+    },
+    setJustRecorded: (justRecorded) => storage().set({ justRecorded }),
     async getTeach() {
       return (await read("teach")) ?? null;
     },

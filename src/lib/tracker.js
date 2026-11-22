@@ -12,8 +12,17 @@ const toCandidate = (n) => ({
   numEpisodes: n.num_episodes ?? 0,
 });
 
-export function createTracker({ store, api, notify, now = Date.now }) {
-  const confirmNotified = new Set();
+export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date.now }) {
+  const confirmEmitted = new Set();
+
+  // Tells the caller what happened. A failing listener never breaks tracking.
+  async function emit(event) {
+    try {
+      await rawEmit(event);
+    } catch (e) {
+      console.error("NextEp: event listener failed:", e);
+    }
+  }
   let queue = Promise.resolve();
 
   async function searchFor(candidate) {
@@ -44,7 +53,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
           confirmed: true,
           candidates: [],
         });
-        await notify(`Tracking "${node.title}"`);
+        await emit({ type: "tracking", key, title: node.title });
         return;
       }
       if (exact.length > 1) multiple = exact;
@@ -67,7 +76,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       confirmed: false,
       candidates: pool.slice(0, 5).map(toCandidate),
     });
-    await notify("Not sure which anime this is. Open the popup to confirm.");
+    await emit({ type: "unsure", key });
   }
 
   // Keeps the last list status read from MAL on the mapping, for the badge, and keeps
@@ -88,7 +97,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
     await store.setMapping(key, next);
   }
 
-  async function applyProgressNow(malId, n, { force = false, silent = false, key } = {}) {
+  async function applyProgressNow(malId, n, { force = false, silent = false, key, pageEpisode, context } = {}) {
     const node = await api.details(malId, "num_episodes,my_list_status");
     const numEpisodes = node.num_episodes ?? 0;
     const title = node.title ?? `Anime ${malId}`;
@@ -106,16 +115,30 @@ export function createTracker({ store, api, notify, now = Date.now }) {
         pausedAtLeast: plan.skip === "paused" && fits ? n : 0,
       });
       if (plan.skip === "exceeds-total" && !silent) {
-        await notify(
-          `${title}: episode ${n} is higher than MyAnimeList's ${numEpisodes} episodes, so it wasn't updated (the site may number episodes differently)`,
-        );
+        await emit({ type: "exceeds-total", key, episode: n, total: numEpisodes });
       }
       return { updated: false, skip: plan.skip, numEpisodes };
     }
     const listStatus = await api.updateStatus(malId, plan.body);
     await recordList(key, plan.body.status ?? current?.status, plan.body.num_watched_episodes);
-    const completed = plan.body.status === "completed" ? ", completed" : "";
-    if (!silent) await notify(`${title}: watched ${n}/${numEpisodes || "?"}${completed}`);
+    if (!silent) {
+      const count = plan.body.num_watched_episodes ?? current?.num_episodes_watched ?? 0;
+      if (key && pageEpisode != null) {
+        const mapping = await store.getMapping(key);
+        if (mapping) {
+          await store.setMapping(key, { ...mapping, lastRecorded: { pageEpisode, count, at: now() } });
+        }
+      }
+      await emit({
+        type: "recorded",
+        key,
+        title,
+        count,
+        total: numEpisodes,
+        completed: plan.body.status === "completed",
+        context,
+      });
+    }
     return { updated: true, numEpisodes, listStatus };
   }
 
@@ -151,29 +174,40 @@ export function createTracker({ store, api, notify, now = Date.now }) {
     return { updated: true, numEpisodes: total, listStatus };
   }
 
+  async function removeFromListNow(key) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    await api.removeStatus(mapping.malId);
+    // The mapping stays. Only the cached list state goes.
+    const next = { ...mapping, listStatus: null };
+    delete next.paused;
+    delete next.pausedEpisode;
+    await store.setMapping(key, next);
+  }
+
   async function noteListStatusNow(key, listStatus) {
     await recordList(key, listStatus?.status, listStatus?.num_episodes_watched ?? 0);
   }
 
-  async function markWatched(key, n) {
+  async function markWatched(key, n, extra = {}) {
     const mapping = await store.getMapping(key);
     if (mapping.malId === null || !mapping.confirmed) {
       await store.setMapping(key, {
         ...mapping,
         pendingEpisode: Math.max(mapping.pendingEpisode ?? 0, n),
       });
-      if (!confirmNotified.has(key)) {
-        confirmNotified.add(key);
-        await notify("Pick the right anime in the popup to record your progress");
+      if (!confirmEmitted.has(key)) {
+        confirmEmitted.add(key);
+        await emit({ type: "needs-confirm", key });
       }
       return { pending: true };
     }
-    return applyProgressNow(mapping.malId, n, { key });
+    return applyProgressNow(mapping.malId, n, { key, ...extra });
   }
 
   // trigger says what changed: "url" is a bare address change, "title" is a loaded or
   // changed title. The tab title is still the old page's right after an address change.
-  async function visit(parsed, trigger = "title") {
+  async function visit(parsed, trigger = "title", context) {
     const { slug, key, titleName, source } = parsed;
     if (source === "none") {
       // Nothing to count. Just make sure the show has a mapping.
@@ -208,7 +242,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
         await ensureMappingNow(key, slug, trigger === "title" ? titleName : null);
       }
     }
-    if (step) await markWatched(key, prev.episode);
+    if (step) await markWatched(key, prev.episode, { pageEpisode: episode, context });
   }
 
   async function ensureMappingNow(key, slug, titleName) {
@@ -225,7 +259,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       confirmed: true,
       candidates: [],
     });
-    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode, { key });
+    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode, { key, silent: true });
     return null;
   }
 
@@ -239,13 +273,14 @@ export function createTracker({ store, api, notify, now = Date.now }) {
   }
 
   return {
-    handleVisit: (parsed, trigger) => enqueue(() => visit(parsed, trigger)),
+    handleVisit: (parsed, trigger, context) => enqueue(() => visit(parsed, trigger, context)),
     ensureMapping: (key, slug, titleName) =>
       enqueue(() => ensureMappingNow(key, slug, titleName)),
     applyProgress: (malId, n, options) => enqueue(() => applyProgressNow(malId, n, options)),
     selectMapping: (key, malId) => enqueue(() => selectMappingNow(key, malId)),
     resume: (key, episode) => enqueue(() => resumeNow(key, episode)),
     setStatus: (key, status) => enqueue(() => setStatusNow(key, status)),
+    removeFromList: (key) => enqueue(() => removeFromListNow(key)),
     noteListStatus: (key, listStatus) => enqueue(() => noteListStatusNow(key, listStatus)),
   };
 }

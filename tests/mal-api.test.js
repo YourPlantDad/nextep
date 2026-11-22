@@ -85,3 +85,43 @@ test("non-2xx throws with status and truncated body", async () => {
     return true;
   });
 });
+
+test("removeStatus sends DELETE with the bearer header", async () => {
+  let call;
+  const api = createApi({
+    tokens: makeTokens(),
+    fetch: async (url, init) => {
+      call = { url, init };
+      return res(200, []);
+    },
+  });
+  await api.removeStatus(7);
+  assert.equal(call.url, "https://api.myanimelist.net/v2/anime/7/my_list_status");
+  assert.equal(call.init.method, "DELETE");
+  assert.equal(call.init.headers.Authorization, "Bearer old");
+});
+
+test("removeStatus is fine with an empty 200 body", async () => {
+  const api = createApi({ tokens: makeTokens(), fetch: async () => res(200, "") });
+  await api.removeStatus(7);
+});
+
+test("removeStatus treats 404 as already off the list", async () => {
+  const api = createApi({ tokens: makeTokens(), fetch: async () => res(404, "not found") });
+  await api.removeStatus(7);
+});
+
+test("removeStatus does 401 -> refresh -> retry", async () => {
+  const tokens = makeTokens();
+  const seen = [];
+  const api = createApi({
+    tokens,
+    fetch: async (url, init) => {
+      seen.push(init.headers.Authorization);
+      return seen.length === 1 ? res(401) : res(200, "");
+    },
+  });
+  await api.removeStatus(7);
+  assert.deepEqual(seen, ["Bearer old", "Bearer new"]);
+  assert.equal(tokens.refreshes, 1);
+});

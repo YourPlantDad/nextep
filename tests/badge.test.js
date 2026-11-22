@@ -52,3 +52,19 @@ test("priority is !, ?, II, end", () => {
   assert.equal(badge({ mapping: { ...paused, confirmed: false }, episode: 12 }), "?");
   assert.equal(badge({ mapping: paused, episode: 12 }), "II");
 });
+
+test("a check mark shows when this page's episode was just recorded", () => {
+  const lastRecorded = { pageEpisode: 5, count: 4, at: 1 };
+  assert.equal(badge({ episode: 5, mapping: mapping({ lastRecorded }) }), "✓");
+  assert.equal(badge({ episode: 6, mapping: mapping({ lastRecorded }) }), "");
+  assert.equal(badge({ episode: null, mapping: mapping({ lastRecorded }) }), "");
+});
+
+test("the check mark loses to ! ? and II and beats end", () => {
+  const lastRecorded = { pageEpisode: 12, count: 11, at: 1 };
+  const m = mapping({ lastRecorded });
+  assert.equal(badge({ signedIn: false, mapping: m, episode: 12 }), "!");
+  assert.equal(badge({ mapping: { ...m, confirmed: false }, episode: 12 }), "?");
+  assert.equal(badge({ mapping: { ...m, paused: "on_hold" }, episode: 12 }), "II");
+  assert.equal(badge({ mapping: m, episode: 12 }), "✓");
+});

@@ -23,7 +23,6 @@
     "tabs",
     "storage",
     "identity",
-    "notifications",
     "https://api.myanimelist.net/*",
     "https://myanimelist.net/*"
   ],

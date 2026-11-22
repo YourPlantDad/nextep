@@ -45,8 +45,9 @@ function setup({ searchResults = {}, anime = {}, signedIn = true } = {}) {
   );
   const store = createStore(area);
   const patches = [];
+  const removals = [];
   const searches = [];
-  const notes = [];
+  const events = [];
   const api = {
     async search(q) {
       searches.push(q);
@@ -61,9 +62,12 @@ function setup({ searchResults = {}, anime = {}, signedIn = true } = {}) {
       patches.push({ id, body });
       return body;
     },
+    async removeStatus(id) {
+      removals.push(id);
+    },
   };
-  const tracker = createTracker({ store, api, notify: async (m) => notes.push(m), now: () => 42 });
-  return { store, tracker, patches, searches, notes };
+  const tracker = createTracker({ store, api, emit: async (e) => events.push(e), now: () => 42 });
+  return { store, tracker, patches, removals, searches, events };
 }
 
 const jjkEnv = (listStatus) =>
@@ -113,7 +117,7 @@ test("MAL already ahead -> no PATCH", async () => {
 });
 
 test("unconfirmed mapping stores pendingEpisode; selectMapping applies it", async () => {
-  const { tracker, store, patches, notes } = setup({
+  const { tracker, store, patches, events } = setup({
     searchResults: {
       "foo bar": [
         { id: 1, title: "Foo Bar Special", media_type: "special", num_episodes: 1 },
@@ -129,7 +133,7 @@ test("unconfirmed mapping stores pendingEpisode; selectMapping applies it", asyn
   assert.equal(mapping.confirmed, false);
   assert.equal(mapping.pendingEpisode, 4);
   assert.equal(mapping.candidates.length, 2);
-  assert.ok(notes.some((n) => n.startsWith("Not sure")));
+  assert.ok(events.some((e) => e.type === "unsure"));
 
   await tracker.selectMapping("example.tv|foo-bar", 2);
   assert.deepEqual(patches, [{ id: 2, body: { num_watched_episodes: 4, status: "watching" } }]);
@@ -250,18 +254,59 @@ test("search 500 also propagates without storing a mapping", async () => {
   assert.equal(await store.getMapping("example.tv|foo-bar"), undefined);
 });
 
-test("silent applyProgress still PATCHes but does not notify", async () => {
-  const { tracker, patches, notes } = jjkEnv();
+test("silent applyProgress still PATCHes but emits nothing and stores no lastRecorded", async () => {
+  const { tracker, patches, events } = jjkEnv();
   const res = await tracker.applyProgress(51009, 3, { force: true, silent: true });
   assert.equal(res.updated, true);
   assert.equal(patches.length, 1);
-  assert.deepEqual(notes, []);
+  assert.deepEqual(events, []);
 });
 
-test("non-silent applyProgress notifies", async () => {
-  const { tracker, notes } = jjkEnv();
+test("non-silent applyProgress emits a recorded event", async () => {
+  const { tracker, events } = jjkEnv();
   await tracker.applyProgress(51009, 3);
-  assert.deepEqual(notes, ["Jujutsu Kaisen 2nd Season: watched 3/23"]);
+  assert.deepEqual(events, [
+    {
+      type: "recorded",
+      key: undefined,
+      title: "Jujutsu Kaisen 2nd Season",
+      count: 3,
+      total: 23,
+      completed: false,
+      context: undefined,
+    },
+  ]);
+});
+
+test("an automatic step emits one recorded event and stores lastRecorded", async () => {
+  const { tracker, store, events } = jjkEnv();
+  const context = { tabId: 3, windowId: 1 };
+  await tracker.handleVisit(visit(JJK, 4), "title", context);
+  await tracker.handleVisit(visit(JJK, 5), "title", context);
+  assert.deepEqual(events.map((e) => e.type), ["tracking", "recorded"]);
+  assert.deepEqual(events[1], {
+    type: "recorded",
+    key: JJK_KEY,
+    title: "Jujutsu Kaisen 2nd Season",
+    count: 4,
+    total: 23,
+    completed: false,
+    context,
+  });
+  assert.deepEqual((await store.getMapping(JJK_KEY)).lastRecorded, {
+    pageEpisode: 5,
+    count: 4,
+    at: 42,
+  });
+});
+
+test("a manual update through the key emits nothing and stores no lastRecorded", async () => {
+  const { tracker, store, events } = jjkEnv();
+  await tracker.handleVisit(visit(JJK, 1));
+  events.length = 0;
+  await tracker.applyProgress(51009, 3, { force: true, silent: true, key: JJK_KEY });
+  assert.deepEqual(events, []);
+  assert.equal((await store.getMapping(JJK_KEY)).lastRecorded, undefined);
 });
 
 test("a queued selectMapping waits for an in-flight handleVisit and nothing deadlocks", async () => {
@@ -310,7 +355,7 @@ test("a long title is searched cut short but matched against the full text", asy
 });
 
 test("the shorter slug guess only fills suggestions and is never accepted", async () => {
-  const { tracker, store, searches, notes } = setup({
+  const { tracker, store, searches, events } = setup({
     searchResults: {
       "jujutsu kaisen 2nd": [{ id: 3, title: "Jujutsu Kaisen 2nd", num_episodes: 12 }],
     },
@@ -325,7 +370,7 @@ test("the shorter slug guess only fills suggestions and is never accepted", asyn
   assert.equal(m.confirmed, false);
   assert.equal(m.malId, 3);
   assert.deepEqual(m.candidates.map((c) => c.id), [3]);
-  assert.ok(notes.some((n) => n.startsWith("Not sure")));
+  assert.ok(events.some((e) => e.type === "unsure"));
 });
 
 test("two exact matches from an auto candidate are not accepted", async () => {
@@ -515,11 +560,11 @@ test("suggestions come from the last auto candidate with results, not the shorte
 const JJK_KEY = `example.tv|${JJK}`;
 
 test("automatic step on an on-hold anime writes nothing and remembers the episode", async () => {
-  const { tracker, store, patches, notes } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  const { tracker, store, patches, events } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
   await tracker.handleVisit(visit(JJK, 4));
   await tracker.handleVisit(visit(JJK, 5));
   assert.deepEqual(patches, []);
-  assert.deepEqual(notes, ['Tracking "Jujutsu Kaisen 2nd Season"']);
+  assert.deepEqual(events.map((e) => e.type), ["tracking"]);
   let m = await store.getMapping(JJK_KEY);
   assert.equal(m.paused, "on_hold");
   assert.equal(m.pausedEpisode, 4);
@@ -540,18 +585,18 @@ test("dropped is stored as paused too", async () => {
 });
 
 test("resume sets watching with the highest known count and clears the flags", async () => {
-  const { tracker, store, patches, notes } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  const { tracker, store, patches, events } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
   await tracker.handleVisit(visit(JJK, 4));
   await tracker.handleVisit(visit(JJK, 5));
   await tracker.handleVisit(visit(JJK, 6));
-  notes.length = 0;
+  events.length = 0;
   await tracker.resume(JJK_KEY, null);
   assert.deepEqual(patches, [{ id: 51009, body: { status: "watching", num_watched_episodes: 5 } }]);
   const m = await store.getMapping(JJK_KEY);
   assert.equal(m.paused, undefined);
   assert.equal(m.pausedEpisode, undefined);
   assert.deepEqual(m.listStatus, { status: "watching", watched: 5 });
-  assert.deepEqual(notes, []);
+  assert.deepEqual(events, []);
 
   await tracker.resume(JJK_KEY, 9);
   assert.deepEqual(patches[1].body, { status: "watching", num_watched_episodes: 9 });
@@ -608,12 +653,12 @@ test("noteListStatus keeps paused in step and clears it once the status changes"
 });
 
 test("setStatus completed with a known total sends status and count", async () => {
-  const { tracker, store, patches, notes } = jjkEnv({ status: "watching", num_episodes_watched: 5 });
+  const { tracker, store, patches, events } = jjkEnv({ status: "watching", num_episodes_watched: 5 });
   await tracker.handleVisit(visit(JJK, 1));
-  notes.length = 0;
+  events.length = 0;
   await tracker.setStatus(JJK_KEY, "completed");
   assert.deepEqual(patches, [{ id: 51009, body: { status: "completed", num_watched_episodes: 23 } }]);
-  assert.deepEqual(notes, []);
+  assert.deepEqual(events, []);
   assert.deepEqual((await store.getMapping(JJK_KEY)).listStatus, { status: "completed", watched: 23 });
 });
 
@@ -643,4 +688,20 @@ test("setStatus to other statuses sends only the status and tracks paused", asyn
   assert.deepEqual(patches[1].body, { status: "plan_to_watch" });
   assert.equal((await store.getMapping(JJK_KEY)).paused, undefined);
   await assert.rejects(tracker.setStatus(JJK_KEY, "nope"), /status/);
+});
+
+test("removeFromList calls the API once and clears the cached list state", async () => {
+  const { tracker, store, removals } = jjkEnv({ status: "on_hold", num_episodes_watched: 5 });
+  await tracker.handleVisit(visit(JJK, 1));
+  await tracker.noteListStatus(JJK_KEY, { status: "on_hold", num_episodes_watched: 5 });
+  const before = await store.getMapping(JJK_KEY);
+  await store.setMapping(JJK_KEY, { ...before, pausedEpisode: 6 });
+  await tracker.removeFromList(JJK_KEY);
+  assert.deepEqual(removals, [51009]);
+  const m = await store.getMapping(JJK_KEY);
+  assert.equal(m.listStatus, null);
+  assert.equal(m.paused, undefined);
+  assert.equal(m.pausedEpisode, undefined);
+  assert.equal(m.malId, 51009);
+  assert.equal(m.confirmed, true);
 });

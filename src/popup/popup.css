@@ -40,6 +40,11 @@ p {
   margin: 6px 0;
 }
 
+.recorded {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
