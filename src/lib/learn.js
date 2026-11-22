@@ -5,7 +5,7 @@ const isAlnum = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 const LEADING_SEPARATORS = /^[\s\-\u2013\u2014:|·]+/;
 const TRAILING_SEPARATORS = /[\s\-\u2013\u2014:|·]+$/;
 
-// Stands in for the part that differs while I look at the rest of the address.
+// Stands in for the part that differs while the rest of the address is compared.
 const MARK = "";
 
 // Finds the part that differs between a and b. The edges never cut through a run of
@@ -149,7 +149,7 @@ export function learnRule(first, second) {
   const ua = toHttpUrl(first?.url);
   const ub = toHttpUrl(second?.url);
   if (!ua || !ub) {
-    return { ok: false, error: "I can only learn from pages whose address starts with http or https." };
+    return { ok: false, error: "This only works on pages whose address starts with http or https." };
   }
   const host = siteHost(ua);
   if (host !== siteHost(ub)) {
@@ -171,7 +171,7 @@ export function learnRule(first, second) {
 
   const episodeFrom = inUrl ? "url" : title ? "title" : "none";
   const url = buildAddress(addrA, addrDiff, inUrl);
-  if (!url) return { ok: false, error: "I couldn't find the show name in the address." };
+  if (!url) return { ok: false, error: "The show name isn't in the address." };
 
   // The title template stays even when the address has the episode. It's a cross-check
   // and gives the show name.

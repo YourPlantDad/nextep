@@ -215,7 +215,7 @@ export function validateTemplate(template, kind, { needsEpisode = false } = {}) 
   for (const p of tokenize(template)) {
     if (p.block === undefined) continue;
     if (!BLOCKS.has(p.block)) {
-      return `I don't know {${p.block}}. The blocks are {show}, {episode} and {anything}.`;
+      return `{${p.block}} isn't a block. The blocks are {show}, {episode} and {anything}.`;
     }
     counts[p.block]++;
   }
@@ -223,6 +223,6 @@ export function validateTemplate(template, kind, { needsEpisode = false } = {}) 
   if (counts.episode > 1) return "Use {episode} only once.";
   if (kind === "url" && counts.show !== 1) return "The address needs {show} once.";
   if (needsEpisode && counts.episode !== 1) return "This one needs {episode} once.";
-  if (!compileTemplate(template, kind)) return "I can't read this template.";
+  if (!compileTemplate(template, kind)) return "This template can't be read.";
   return null;
 }
