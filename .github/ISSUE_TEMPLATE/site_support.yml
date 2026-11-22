@@ -1,0 +1,26 @@
+name: An episode page isn't detected
+description: NextEp doesn't recognise an episode page on a site you use.
+labels: [site-support]
+body:
+  - type: input
+    id: url-path
+    attributes:
+      label: URL path shape of an episode page
+      description: >-
+        Give just the path part of the URL and replace the domain with example.tv,
+        like https://example.tv/watch/some-show-12345/ep-4. Don't name the site.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: What happens instead?
+      description: For example, the popup says "This page isn't a tracked episode page." or the wrong anime is matched.
+  - type: input
+    id: firefox-version
+    attributes:
+      label: Firefox version
+  - type: input
+    id: extension-version
+    attributes:
+      label: NextEp version

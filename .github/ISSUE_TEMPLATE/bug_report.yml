@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in NextEp isn't working the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: firefox-version
+    attributes:
+      label: Firefox version
+    validations:
+      required: true
+  - type: input
+    id: extension-version
+    attributes:
+      label: NextEp version
+      description: Shown in about:addons.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors
+      description: 'Open about:debugging#/runtime/this-firefox, click "Inspect" next to NextEp and copy anything red from the Console. Take out anything private.'
+      render: text

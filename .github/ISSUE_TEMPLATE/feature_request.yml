@@ -1,0 +1,15 @@
+name: Feature request
+description: Something you'd like NextEp to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What's it for?
+      description: What are you trying to do that's awkward or not possible right now?
