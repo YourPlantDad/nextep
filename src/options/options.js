@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const send = (message) => browser.runtime.sendMessage(message);
 
 let signedIn = false;
+let userName = null;
 
 function showError(text) {
   $("error").textContent = text;
@@ -88,7 +89,11 @@ function collect() {
 
 function paintAuth() {
   $("auth").textContent = signedIn ? "Sign out" : "Sign in";
-  $("status").textContent = signedIn ? "Signed in to MyAnimeList." : "Not signed in.";
+  $("status").textContent = !signedIn
+    ? "Not signed in."
+    : userName
+      ? `Signed in as ${userName}.`
+      : "Signed in to MyAnimeList.";
 }
 
 async function run(button, fn) {
@@ -108,8 +113,9 @@ async function run(button, fn) {
 }
 
 async function refreshStatus() {
-  const state = await send({ type: "getState", url: "" });
+  const state = await send({ type: "getAccount" });
   signedIn = Boolean(state.ok && state.signedIn);
+  userName = signedIn ? (state.name ?? null) : null;
   paintAuth();
 }
 
@@ -128,6 +134,23 @@ $("save").addEventListener("click", (e) => run(e.target, save));
 
 $("addSite").addEventListener("click", () => {
   $("sites").append(siteRow({ host: "", url: "", title: "", episodeFrom: "url" }));
+});
+
+$("testNote").addEventListener("click", async (e) => {
+  const button = e.target;
+  button.disabled = true;
+  $("noteResult").textContent = "";
+  try {
+    const res = await send({ type: "testNotification" });
+    $("noteResult").textContent =
+      res.ok && res.sent
+        ? "Sent. If nothing popped up, check Windows notification settings for Firefox."
+        : `Couldn't send it: ${res.error ?? "unknown error"}`;
+  } catch (err) {
+    $("noteResult").textContent = `Couldn't send it: ${err.message ?? String(err)}`;
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("redirect").value));
