@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseUrl, detectGeneric, validateRules, DEFAULT_RULES } from "../src/lib/url-parser.js";
+import {
+  parseUrl,
+  parseTab,
+  visitTrigger,
+  pickEpisode,
+  hostHasRule,
+  detectGeneric,
+  validateRules,
+  DEFAULT_RULES,
+} from "../src/lib/url-parser.js";
 
 const RULES = [{ host: "example.tv", pattern: "^/watch/(?<slug>[^/]+)/ep-(?<ep>\\d+)" }];
 const BASE = "https://example.tv/watch/jujutsu-kaisen-2nd-season-78067";
@@ -16,6 +25,11 @@ test("example.tv episodes: same key, different episode", () => {
     slug: "jujutsu-kaisen-2nd-season-78067",
     episode: 4,
     key: "example.tv|jujutsu-kaisen-2nd-season-78067",
+    urlEpisode: 4,
+    titleEpisode: null,
+    titleName: null,
+    hasTitleTemplate: false,
+    source: "url",
   });
 });
 
@@ -62,6 +76,139 @@ test("validateRules", () => {
   assert.match(validateRules([{ host: "a.tv", pattern: "(" }]), /invalid pattern/);
   assert.match(validateRules([{ host: "a.tv", pattern: "(?<slug>x)" }]), /groups/);
   assert.match(validateRules([{ host: "", pattern: "x" }]), /host/);
+});
+
+const TEMPLATE_URL = {
+  host: "example.tv",
+  url: "/watch/{show}/ep-{episode}",
+  episodeFrom: "url",
+};
+const TEMPLATE_TITLE = {
+  host: "example.tv",
+  url: "/watch/{show}?ep={anything}",
+  title: "{show} Episode {episode}{anything}",
+  episodeFrom: "title",
+};
+const TEMPLATE_NONE = { host: "example.tv", url: "/watch/{anything}/{show}", episodeFrom: "none" };
+
+test("parseTab with an address template", () => {
+  const r = parseTab({ url: "https://example.tv/watch/Some-Show-9/ep-3", title: "x" }, [TEMPLATE_URL]);
+  assert.deepEqual(r, {
+    host: "example.tv",
+    slug: "some-show-9",
+    episode: 3,
+    key: "example.tv|some-show-9",
+    urlEpisode: 3,
+    titleEpisode: null,
+    titleName: null,
+    hasTitleTemplate: false,
+    source: "url",
+  });
+});
+
+test("parseTab with an episode from the title", () => {
+  const url = "https://example.tv/watch/some-show-9?ep=1234";
+  const hit = parseTab({ url, title: "Some Show Episode 5 at ExampleSite" }, [TEMPLATE_TITLE]);
+  assert.equal(hit.episode, 5);
+  assert.equal(hit.source, "title");
+  assert.equal(hit.titleName, "Some Show");
+  assert.equal(hit.slug, "some-show-9");
+  const miss = parseTab({ url, title: "Loading" }, [TEMPLATE_TITLE]);
+  assert.equal(miss.episode, null);
+  assert.equal(miss.titleName, null);
+  assert.equal(miss.source, "title");
+});
+
+test("parseTab with no episode source", () => {
+  const r = parseTab({ url: "https://example.tv/watch/21/some-show-9", title: "" }, [TEMPLATE_NONE]);
+  assert.equal(r.episode, null);
+  assert.equal(r.source, "none");
+  assert.equal(r.slug, "some-show-9");
+});
+
+test("parseTab accepts old and new rules together and never throws", () => {
+  const rules = [RULES[0], TEMPLATE_TITLE, { host: "example.tv", url: "/{nope}", episodeFrom: "url" }, null];
+  assert.equal(parseTab({ url: "https://example.tv/watch/a-1/ep-2" }, rules).source, "url");
+  assert.equal(parseTab({ url: "https://example.tv/watch/a-1?ep=9", title: "A Episode 2" }, rules).episode, 2);
+  assert.equal(parseTab({ url: "https://example.tv/elsewhere" }, rules), null);
+  assert.equal(parseTab(undefined, rules), null);
+  assert.equal(parseTab({ url: "https://example.tv/watch/a-1/ep-2" }, null), null);
+});
+
+test("hostHasRule follows host matching", () => {
+  assert.equal(hostHasRule("https://www.example.tv/anything", RULES), true);
+  assert.equal(hostHasRule("https://notexample.tv/anything", RULES), false);
+  assert.equal(hostHasRule("nope", RULES), false);
+});
+
+test("visitTrigger", () => {
+  const parsed = { source: "url", episode: 2 };
+  assert.equal(visitTrigger(parsed, { url: "https://example.tv/x" }), "url");
+  assert.equal(visitTrigger(parsed, { title: "t" }), "title");
+  assert.equal(visitTrigger(parsed, { status: "complete" }), "title");
+  assert.equal(visitTrigger(parsed, { url: "https://example.tv/x", status: "complete" }), "title");
+  assert.equal(visitTrigger(parsed, { status: "loading" }), null);
+  assert.equal(visitTrigger(parsed, {}), null);
+  assert.equal(visitTrigger(null, { url: "u" }), null);
+});
+
+test("parseTab keeps both episode numbers", () => {
+  const rule = {
+    host: "h.example",
+    url: "/watch/{show}?ep={episode}",
+    title: "{show} Episode {episode}{anything}",
+    episodeFrom: "url",
+  };
+  const r = parseTab(
+    { url: "https://h.example/watch/one-piece-1?ep=150093", title: "One Piece Episode 2 | SiteH" },
+    [rule],
+  );
+  assert.equal(r.episode, 150093);
+  assert.equal(r.urlEpisode, 150093);
+  assert.equal(r.titleEpisode, 2);
+  assert.equal(r.titleName, "One Piece");
+  assert.equal(r.hasTitleTemplate, true);
+  const t = parseTab(
+    { url: "https://h.example/watch/one-piece-1?ep=150093", title: "One Piece Episode 2 | SiteH" },
+    [{ ...rule, episodeFrom: "title" }],
+  );
+  assert.equal(t.episode, 2);
+});
+
+test("pickEpisode lets the title win only when the address number can't be an episode", () => {
+  const base = { source: "url", urlEpisode: 5, titleEpisode: 4 };
+  assert.deepEqual(pickEpisode(base, 23), { episode: 5, fromTitle: false });
+  assert.deepEqual(pickEpisode({ ...base, urlEpisode: 150093, titleEpisode: 2 }, 13), {
+    episode: 2,
+    fromTitle: true,
+  });
+  assert.deepEqual(pickEpisode({ ...base, urlEpisode: 150093, titleEpisode: 2 }, 0), {
+    episode: 2,
+    fromTitle: true,
+  });
+  assert.deepEqual(pickEpisode({ ...base, urlEpisode: 1500, titleEpisode: 2 }, 0), {
+    episode: 1500,
+    fromTitle: false,
+  });
+  assert.deepEqual(pickEpisode({ ...base, urlEpisode: 30, titleEpisode: 40 }, 23), {
+    episode: 30,
+    fromTitle: false,
+  });
+  assert.deepEqual(pickEpisode({ source: "title", titleEpisode: null }, 5), {
+    episode: null,
+    fromTitle: true,
+  });
+  assert.deepEqual(pickEpisode({ source: "none" }, 5), { episode: null, fromTitle: false });
+});
+
+test("validateRules for template rules", () => {
+  assert.equal(validateRules([TEMPLATE_URL, TEMPLATE_TITLE, TEMPLATE_NONE]), null);
+  assert.match(validateRules([{ ...TEMPLATE_URL, episodeFrom: "maybe" }]), /episode number comes from/);
+  assert.match(validateRules([{ ...TEMPLATE_URL, url: "/watch/ep-{episode}" }]), /show/);
+  assert.match(validateRules([{ ...TEMPLATE_URL, url: "/watch/{show}" }]), /episode/);
+  assert.match(validateRules([{ ...TEMPLATE_TITLE, title: "" }]), /tab title/);
+  assert.match(validateRules([{ ...TEMPLATE_TITLE, title: "{show} Episode" }]), /episode/);
+  assert.match(validateRules([{ ...TEMPLATE_NONE, title: "{show} {what}" }]), /what/);
 });
 
 test("no rules are enabled by default", () => {

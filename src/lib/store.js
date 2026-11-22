@@ -39,5 +39,10 @@ export function createStore(area) {
     setMapping: (key, mapping) => writeMap("mappings", key, mapping),
     getLastSeen: (key) => readMap("lastSeen", key),
     setLastSeen: (key, value) => writeMap("lastSeen", key, value),
+    async getTeach() {
+      return (await read("teach")) ?? null;
+    },
+    setTeach: (teach) => storage().set({ teach }),
+    clearTeach: () => storage().remove("teach"),
   };
 }
