@@ -26,7 +26,7 @@ This is in Firefox's extension storage:
 
 ## Which pages are read
 
-NextEp needs the `tabs` permission to see page URLs and titles, so it can read the URL and title of any tab. It only acts on pages of sites you've enabled. On those pages it reads the tab title too, and the show name from it can be sent to MyAnimeList as a search. URLs and titles of other pages aren't stored and aren't sent anywhere. The popup also checks the current tab's URL and title locally, to offer "Enable on this site" and teaching.
+NextEp needs the `tabs` permission to see page URLs and titles, so it can read the URL and title of any tab. It only acts on pages of sites you've enabled. On those pages it reads the tab title too, and the show name from it can be sent to MyAnimeList as a search. URLs and titles of other pages aren't stored and aren't sent anywhere. The popup also checks the current tab's URL and title locally, to offer "Enable on this site" and teaching. NextEp doesn't run in private windows, so nothing from them is read or stored.
 
 ## Removing your data
 
