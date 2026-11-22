@@ -78,7 +78,8 @@ async function signInWith(settings) {
 
 test("code exchange omits client_secret when not configured", async () => {
   const { requests, store, authorizeUrl } = await signInWith({ clientId: "cid" });
-  assert.equal(requests.length, 1);
+  // The token exchange, then the user name lookup.
+  assert.equal(requests.length, 2);
   const body = new URLSearchParams(requests[0].init.body);
   assert.equal(requests[0].init.headers["Content-Type"], "application/x-www-form-urlencoded");
   assert.equal(body.has("client_secret"), false);
@@ -226,4 +227,81 @@ test("refresh uses the effective client ID", async () => {
   await auth.getAccessToken();
   assert.equal(body.get("client_id"), "builtin");
   assert.equal(body.has("client_secret"), false);
+});
+
+// Routes the token endpoint and the user endpoint separately.
+function userEnv({ auth, userResponse }) {
+  const store = createStore(memoryArea({ settings: { clientId: "cid" }, ...(auth && { auth }) }));
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (String(url).includes("/users/@me")) return userResponse(init);
+    return okResponse(tokenJson);
+  };
+  const identity = {
+    getRedirectURL: () => "https://ext.test/redirect",
+    launchWebAuthFlow: async ({ url }) =>
+      `https://ext.test/redirect?code=C&state=${new URL(url).searchParams.get("state")}`,
+  };
+  return { store, calls, auth: createAuth({ store, fetch, identity, now: () => 1000 }) };
+}
+
+test("signIn stores the user name next to the tokens", async () => {
+  const { store, calls, auth } = userEnv({ userResponse: async () => okResponse({ id: 1, name: "Kira" }) });
+  await auth.signIn();
+  assert.equal((await store.getAuth()).name, "Kira");
+  assert.equal((await store.getAuth()).accessToken, "A2");
+  const user = calls.find((c) => c.url === "https://api.myanimelist.net/v2/users/@me");
+  assert.equal(user.init.headers.Authorization, "Bearer A2");
+});
+
+test("signIn still succeeds when the user call fails", async () => {
+  for (const userResponse of [
+    async () => ({ ok: false, status: 500 }),
+    async () => {
+      throw new TypeError("network");
+    },
+    async () => okResponse({ id: 1 }),
+    async () => okResponse({ name: 42 }),
+  ]) {
+    const { store, auth } = userEnv({ userResponse });
+    await auth.signIn();
+    const record = await store.getAuth();
+    assert.equal(record.accessToken, "A2");
+    assert.equal("name" in record, false);
+  }
+});
+
+test("getUserName fetches a missing name once and stores it", async () => {
+  const { store, calls, auth } = userEnv({
+    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000 },
+    userResponse: async () => okResponse({ name: "Kira" }),
+  });
+  assert.equal(await auth.getUserName(), "Kira");
+  assert.equal(await auth.getUserName(), "Kira");
+  assert.equal(calls.length, 1);
+  assert.equal((await store.getAuth()).name, "Kira");
+});
+
+test("getUserName never throws and returns null when signed out or failing", async () => {
+  const signedOut = userEnv({ userResponse: async () => okResponse({ name: "Kira" }) });
+  assert.equal(await signedOut.auth.getUserName(), null);
+  const failing = userEnv({
+    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000 },
+    userResponse: async () => {
+      throw new TypeError("network");
+    },
+  });
+  assert.equal(await failing.auth.getUserName(), null);
+});
+
+test("a token refresh keeps the stored name", async () => {
+  const store = createStore(
+    memoryArea({ auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 1000, name: "Kira" } }),
+  );
+  const auth = createAuth({ store, fetch: async () => okResponse(tokenJson), now: () => 0 });
+  await auth.getAccessToken();
+  const record = await store.getAuth();
+  assert.equal(record.accessToken, "A2");
+  assert.equal(record.name, "Kira");
 });

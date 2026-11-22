@@ -3,6 +3,7 @@ import { BUILT_IN_CLIENT_ID, resolveClient } from "./config.js";
 export const AUTHORIZE_URL = "https://myanimelist.net/v1/oauth2/authorize";
 export const TOKEN_URL = "https://myanimelist.net/v1/oauth2/token";
 
+const USER_URL = "https://api.myanimelist.net/v2/users/@me";
 const CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
 const REFRESH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -71,6 +72,18 @@ function toAuth(json, now) {
   };
 }
 
+// The reference doesn't show this response, so a missing or odd "name" just means unknown.
+async function fetchUserName(fetch, accessToken) {
+  try {
+    const res = await fetch(USER_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) return null;
+    const name = (await res.json())?.name;
+    return typeof name === "string" && name.trim() ? name.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createAuth({
   store,
   fetch = (...args) => globalThis.fetch(...args),
@@ -96,6 +109,7 @@ export function createAuth({
         clientSecret,
       );
       const next = toAuth(json, now);
+      if (auth.name) next.name = auth.name;
       await store.setAuth(next);
       return next.accessToken;
     } catch (e) {
@@ -150,8 +164,27 @@ export function createAuth({
       },
       clientSecret,
     );
-    await store.setAuth(toAuth(json, now));
+    const record = toAuth(json, now);
+    const name = await fetchUserName(fetch, record.accessToken);
+    if (name) record.name = name;
+    await store.setAuth(record);
   }
 
-  return { getAccessToken, refresh, signIn, signOut: () => store.clearAuth() };
+  // Signed-in users from before names were stored get theirs fetched once. This never throws.
+  async function getUserName() {
+    try {
+      const auth = await store.getAuth();
+      if (!auth?.accessToken) return null;
+      if (auth.name) return auth.name;
+      const name = await fetchUserName(fetch, await getAccessToken());
+      if (!name) return null;
+      const latest = await store.getAuth();
+      if (latest?.accessToken) await store.setAuth({ ...latest, name });
+      return name;
+    } catch {
+      return null;
+    }
+  }
+
+  return { getAccessToken, refresh, signIn, getUserName, signOut: () => store.clearAuth() };
 }
