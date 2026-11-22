@@ -398,6 +398,30 @@ test("an internal ID in the address loses to the title, one PATCH at the end", a
   assert.equal((await store.getLastSeen(key)).episode, 2);
 });
 
+test("an impossible address number with no title number records nothing", async () => {
+  const rule = {
+    host: "h.example",
+    url: "/watch/{show}?ep={episode}",
+    title: "{show} Episode {episode}{anything}",
+    episodeFrom: "url",
+  };
+  const key = "h.example|tokyo-revengers-10486";
+  const { tracker, patches, store } = setup();
+  await store.setMapping(key, {
+    malId: 9,
+    title: "Tokyo Revengers",
+    numEpisodes: 13,
+    confirmed: true,
+    candidates: [],
+  });
+  const parsed = tab(rule, "https://h.example/watch/tokyo-revengers-10486?ep=149945", "Loading");
+  assert.equal(parsed.urlEpisode, 149945);
+  assert.equal(parsed.titleEpisode, null);
+  await tracker.handleVisit(parsed, "title");
+  assert.equal(await store.getLastSeen(key), undefined);
+  assert.deepEqual(patches, []);
+});
+
 test("the address wins over a stale title when its number can be an episode", async () => {
   const rule = {
     host: "example.tv",

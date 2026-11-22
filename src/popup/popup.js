@@ -131,7 +131,8 @@ function renderConfirmed(s) {
   const setWatched = (episodes, force) => () =>
     act(() => send({ type: "setWatched", key, episodes, force }));
   const noData = !s.anime;
-  const hasEpisode = episode !== null;
+  const hasEpisode = episode !== null && !(total > 0 && episode > total);
+  const unclear = source !== "none" && !hasEpisode;
   const alreadyWatched = hasEpisode && !noData && episode <= watched;
   return [
     el("h1", {}, el("a", {
@@ -158,7 +159,9 @@ function renderConfirmed(s) {
             ),
           ),
         ]
-      : []),
+      : unclear
+        ? [el("p", { className: "muted", textContent: "I can't tell which episode this page is." })]
+        : []),
     ...(source === "none"
       ? [el("p", { className: "muted", textContent: "This site can't be tracked automatically." })]
       : []),

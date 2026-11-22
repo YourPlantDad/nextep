@@ -194,6 +194,16 @@ test("pickEpisode lets the title win only when the address number can't be an ep
     episode: 30,
     fromTitle: false,
   });
+  // The address number can't be an episode and the title has none: unknown, not a guess.
+  const withTemplate = { ...base, urlEpisode: 149945, titleEpisode: null, hasTitleTemplate: true };
+  for (const total of [13, 0]) {
+    assert.deepEqual(pickEpisode(withTemplate, total), { episode: null, fromTitle: true });
+  }
+  // Without a title template the address number stays, for sites that number differently.
+  const noTemplate = { ...withTemplate, hasTitleTemplate: false };
+  for (const total of [13, 0]) {
+    assert.deepEqual(pickEpisode(noTemplate, total), { episode: 149945, fromTitle: false });
+  }
   assert.deepEqual(pickEpisode({ source: "title", titleEpisode: null }, 5), {
     episode: null,
     fromTitle: true,

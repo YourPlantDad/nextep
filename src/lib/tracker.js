@@ -126,7 +126,13 @@ export function createTracker({ store, api, notify, now = Date.now }) {
     const known = await store.getMapping(key);
     const total = known?.malId ? (known.numEpisodes ?? 0) : 0;
     const { episode, fromTitle } = pickEpisode(parsed, total);
-    if (episode === null || episode === undefined) return;
+    if (episode === null || episode === undefined) {
+      // Unknown episode: record nothing, but the title can still name the show.
+      if (source === "url" && trigger === "title" && !known && (await store.isSignedIn())) {
+        await ensureMappingNow(key, slug, titleName);
+      }
+      return;
+    }
     if (fromTitle && trigger === "url") return;
 
     const prev = await store.getLastSeen(key);

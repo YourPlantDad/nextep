@@ -119,6 +119,8 @@ export function pickEpisode(parsed, total = 0) {
   if (title !== null && title !== url && url > limit && title <= limit) {
     return { episode: title, fromTitle: true };
   }
+  // The address number is an ID and the title can't say yet. Don't guess.
+  if (url > limit && parsed.hasTitleTemplate) return { episode: null, fromTitle: true };
   return { episode: url, fromTitle: false };
 }
 
