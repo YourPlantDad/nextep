@@ -1,0 +1,45 @@
+{
+  "manifest_version": 2,
+  "name": "NextEp",
+  "version": "0.1.0",
+  "description": "Updates your MyAnimeList watched-episode count when you go from one episode to the next.",
+  "homepage_url": "https://github.com/YourPlantDad/nextep",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "nextep@yourplantdad.github.io",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity"
+        ]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "identity",
+    "notifications",
+    "https://api.myanimelist.net/*",
+    "https://myanimelist.net/*"
+  ],
+  "background": {
+    "page": "src/background/background.html"
+  },
+  "browser_action": {
+    "default_title": "NextEp",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon.svg",
+      "96": "icons/icon.svg"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  }
+}
