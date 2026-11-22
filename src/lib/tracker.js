@@ -1,5 +1,5 @@
 import { candidateQueries, exactMatches, truncateQuery, usableTitleName } from "./title-match.js";
-import { computeUpdate } from "./progress.js";
+import { computeUpdate, isPaused, LIST_STATUSES } from "./progress.js";
 import { pickEpisode } from "./url-parser.js";
 
 const SEARCH_FIELDS = "alternative_titles,num_episodes,media_type,start_season";
@@ -12,8 +12,17 @@ const toCandidate = (n) => ({
   numEpisodes: n.num_episodes ?? 0,
 });
 
-export function createTracker({ store, api, notify, now = Date.now }) {
-  const confirmNotified = new Set();
+export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date.now }) {
+  const confirmEmitted = new Set();
+
+  // Tells the caller what happened. A failing listener never breaks tracking.
+  async function emit(event) {
+    try {
+      await rawEmit(event);
+    } catch (e) {
+      console.error("NextEp: event listener failed:", e);
+    }
+  }
   let queue = Promise.resolve();
 
   async function searchFor(candidate) {
@@ -44,7 +53,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
           confirmed: true,
           candidates: [],
         });
-        await notify(`Tracking "${node.title}"`);
+        await emit({ type: "tracking", key, title: node.title });
         return;
       }
       if (exact.length > 1) multiple = exact;
@@ -67,52 +76,156 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       confirmed: false,
       candidates: pool.slice(0, 5).map(toCandidate),
     });
-    await notify("Not sure which anime this is. Open the popup to confirm.");
+    await emit({ type: "unsure", key });
   }
 
-  async function applyProgressNow(malId, n, { force = false, silent = false } = {}) {
+  // Keeps the last list status read from MAL on the mapping, for the badge, and keeps
+  // `paused` in step with it. pausedAtLeast raises the episode waiting to be recorded.
+  // clearRecorded drops the "recorded" mark, for changes the user made by hand.
+  async function recordList(key, status, watched, { pausedAtLeast = 0, clearRecorded = false } = {}) {
+    if (!key) return;
+    const mapping = await store.getMapping(key);
+    if (!mapping) return;
+    const next = { ...mapping, listStatus: status ? { status, watched } : null };
+    if (clearRecorded) delete next.lastRecorded;
+    if (isPaused(status)) {
+      next.paused = status;
+      const episode = Math.max(mapping.pausedEpisode ?? 0, pausedAtLeast);
+      if (episode > 0) next.pausedEpisode = episode;
+    } else {
+      delete next.paused;
+      delete next.pausedEpisode;
+    }
+    await store.setMapping(key, next);
+  }
+
+  async function applyProgressNow(malId, n, { force = false, silent = false, key, pageEpisode, context } = {}) {
     const node = await api.details(malId, "num_episodes,my_list_status");
     const numEpisodes = node.num_episodes ?? 0;
     const title = node.title ?? `Anime ${malId}`;
+    const current = node.my_list_status;
     const plan = computeUpdate({
-      listStatus: node.my_list_status,
+      listStatus: current,
       numEpisodes,
       watched: n,
       force,
     });
     if (plan.skip) {
+      // An episode above the total can't be recorded later, so a paused show doesn't keep it.
+      const fits = !(numEpisodes > 0 && n > numEpisodes);
+      await recordList(key, current?.status, current?.num_episodes_watched ?? 0, {
+        pausedAtLeast: plan.skip === "paused" && fits ? n : 0,
+      });
       if (plan.skip === "exceeds-total" && !silent) {
-        await notify(
-          `${title}: episode ${n} is higher than MyAnimeList's ${numEpisodes} episodes, so it wasn't updated (the site may number episodes differently)`,
-        );
+        await emit({ type: "exceeds-total", key, episode: n, total: numEpisodes });
       }
       return { updated: false, skip: plan.skip, numEpisodes };
     }
     const listStatus = await api.updateStatus(malId, plan.body);
-    const completed = plan.body.status === "completed" ? ", completed" : "";
-    if (!silent) await notify(`${title}: watched ${n}/${numEpisodes || "?"}${completed}`);
+    await recordList(key, plan.body.status ?? current?.status, plan.body.num_watched_episodes, {
+      clearRecorded: force,
+    });
+    if (!silent) {
+      const count = plan.body.num_watched_episodes ?? current?.num_episodes_watched ?? 0;
+      if (key && pageEpisode != null) {
+        const mapping = await store.getMapping(key);
+        if (mapping) {
+          await store.setMapping(key, { ...mapping, lastRecorded: { pageEpisode, count, at: now() } });
+        }
+      }
+      await emit({
+        type: "recorded",
+        key,
+        title,
+        count,
+        total: numEpisodes,
+        completed: plan.body.status === "completed",
+        context,
+      });
+    }
     return { updated: true, numEpisodes, listStatus };
   }
 
-  async function markWatched(key, n) {
+  async function resumeNow(key, episode) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const current = node.my_list_status?.num_episodes_watched ?? 0;
+    let count = Math.max(current, mapping.pausedEpisode ?? 0, episode ?? 0);
+    if (total > 0) count = Math.min(count, total);
+    // Reaching the total completes the show, same as everywhere else.
+    const status = total > 0 && count === total ? "completed" : "watching";
+    const listStatus = await api.updateStatus(mapping.malId, {
+      status,
+      num_watched_episodes: count,
+    });
+    await recordList(key, status, count, { clearRecorded: true });
+    return { updated: true, numEpisodes: total, listStatus };
+  }
+
+  // Applies a change to the count as it is now, not as a page read it earlier.
+  async function adjustWatchedNow(key, delta) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const current = node.my_list_status?.num_episodes_watched ?? 0;
+    let target = Math.max(0, current + delta);
+    if (total > 0) target = Math.min(target, total);
+    if (target === current) return { updated: false, skip: "unchanged", numEpisodes: total };
+    return applyProgressNow(mapping.malId, target, { force: true, silent: true, key });
+  }
+
+  async function setStatusNow(key, status) {
+    if (!LIST_STATUSES.includes(status)) throw new Error("That isn't a list status.");
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const body = { status };
+    if (status === "completed" && total > 0) body.num_watched_episodes = total;
+    const listStatus = await api.updateStatus(mapping.malId, body);
+    const watched = body.num_watched_episodes ?? node.my_list_status?.num_episodes_watched ?? 0;
+    await recordList(key, status, watched, { clearRecorded: true });
+    return { updated: true, numEpisodes: total, listStatus };
+  }
+
+  async function removeFromListNow(key) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    await api.removeStatus(mapping.malId);
+    // The mapping stays. Only the cached list state goes.
+    const next = { ...mapping, listStatus: null };
+    delete next.lastRecorded;
+    delete next.paused;
+    delete next.pausedEpisode;
+    await store.setMapping(key, next);
+  }
+
+  async function noteListStatusNow(key, listStatus) {
+    await recordList(key, listStatus?.status, listStatus?.num_episodes_watched ?? 0);
+  }
+
+  async function markWatched(key, n, extra = {}) {
     const mapping = await store.getMapping(key);
     if (mapping.malId === null || !mapping.confirmed) {
       await store.setMapping(key, {
         ...mapping,
         pendingEpisode: Math.max(mapping.pendingEpisode ?? 0, n),
       });
-      if (!confirmNotified.has(key)) {
-        confirmNotified.add(key);
-        await notify("Pick the right anime in the popup to record your progress");
+      if (!confirmEmitted.has(key)) {
+        confirmEmitted.add(key);
+        await emit({ type: "needs-confirm", key });
       }
       return { pending: true };
     }
-    return applyProgressNow(mapping.malId, n);
+    return applyProgressNow(mapping.malId, n, { key, ...extra });
   }
 
   // trigger says what changed: "url" is a bare address change, "title" is a loaded or
   // changed title. The tab title is still the old page's right after an address change.
-  async function visit(parsed, trigger = "title") {
+  async function visit(parsed, trigger = "title", context) {
     const { slug, key, titleName, source } = parsed;
     if (source === "none") {
       // Nothing to count. Just make sure the show has a mapping.
@@ -137,17 +250,24 @@ export function createTracker({ store, api, notify, now = Date.now }) {
 
     const prev = await store.getLastSeen(key);
     await store.setLastSeen(key, { episode, at: now() });
-    if (!(await store.isSignedIn())) return;
-    const step = Boolean(prev) && episode === prev.episode + 1;
-    if (!known) {
-      // With a title template, the title that follows the page load names the show better.
-      // A step still needs the mapping now, so that one goes by the slug alone.
-      const waitForTitle = parsed.hasTitleTemplate && trigger === "url" && !step;
-      if (!waitForTitle) {
-        await ensureMappingNow(key, slug, trigger === "title" ? titleName : null);
+    try {
+      if (!(await store.isSignedIn())) return;
+      const step = Boolean(prev) && episode === prev.episode + 1;
+      if (!known) {
+        // With a title template, the title that follows the page load names the show better.
+        // A step still needs the mapping now, so that one goes by the slug alone.
+        const waitForTitle = parsed.hasTitleTemplate && trigger === "url" && !step;
+        if (!waitForTitle) {
+          await ensureMappingNow(key, slug, trigger === "title" ? titleName : null);
+        }
       }
+      if (step) await markWatched(key, prev.episode, { pageEpisode: episode, context });
+    } catch (e) {
+      // The step wasn't recorded, so the next event for this page has to count as one again.
+      if (prev) await store.setLastSeen(key, prev);
+      else await store.clearLastSeen(key);
+      throw e;
     }
-    if (step) await markWatched(key, prev.episode);
   }
 
   async function ensureMappingNow(key, slug, titleName) {
@@ -164,7 +284,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       confirmed: true,
       candidates: [],
     });
-    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode);
+    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode, { key, silent: true });
     return null;
   }
 
@@ -178,10 +298,16 @@ export function createTracker({ store, api, notify, now = Date.now }) {
   }
 
   return {
-    handleVisit: (parsed, trigger) => enqueue(() => visit(parsed, trigger)),
+    handleVisit: (parsed, trigger, context) => enqueue(() => visit(parsed, trigger, context)),
     ensureMapping: (key, slug, titleName) =>
       enqueue(() => ensureMappingNow(key, slug, titleName)),
     applyProgress: (malId, n, options) => enqueue(() => applyProgressNow(malId, n, options)),
     selectMapping: (key, malId) => enqueue(() => selectMappingNow(key, malId)),
+    resume: (key, episode) => enqueue(() => resumeNow(key, episode)),
+    adjustWatched: (key, delta) => enqueue(() => adjustWatchedNow(key, delta)),
+    clearListState: () => enqueue(() => store.clearListState()),
+    setStatus: (key, status) => enqueue(() => setStatusNow(key, status)),
+    removeFromList: (key) => enqueue(() => removeFromListNow(key)),
+    noteListStatus: (key, listStatus) => enqueue(() => noteListStatusNow(key, listStatus)),
   };
 }

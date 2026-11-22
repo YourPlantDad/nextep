@@ -8,6 +8,7 @@ import {
   hostHasRule,
   detectGeneric,
   validateRules,
+  findRuleProblem,
   DEFAULT_RULES,
 } from "../src/lib/url-parser.js";
 
@@ -75,7 +76,7 @@ test("validateRules", () => {
   assert.equal(validateRules(RULES), null);
   assert.match(validateRules([{ host: "a.tv", pattern: "(" }]), /invalid pattern/);
   assert.match(validateRules([{ host: "a.tv", pattern: "(?<slug>x)" }]), /groups/);
-  assert.match(validateRules([{ host: "", pattern: "x" }]), /host/);
+  assert.match(validateRules([{ host: "", pattern: "x" }]), /website/);
 });
 
 const TEMPLATE_URL = {
@@ -224,4 +225,37 @@ test("validateRules for template rules", () => {
 test("no rules are enabled by default", () => {
   assert.deepEqual(DEFAULT_RULES, []);
   assert.equal(parseUrl(`${BASE}/ep-4`, DEFAULT_RULES), null);
+});
+
+test("validateRules rejects a website that is not a hostname", () => {
+  const rule = (host) => ({ host, pattern: "(?<slug>a)(?<ep>1)" });
+  assert.equal(validateRules([rule("example.tv"), rule("localhost")]), null);
+  for (const host of ["https://example.tv", "example", "not a host", "example.tv/watch"]) {
+    assert.equal(validateRules([rule(host)]), `${host}: the website should look like example.tv.`);
+  }
+});
+
+test("findRuleProblem reports the index of a bad rule in the middle of a list", () => {
+  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
+  const bad = { host: "b.tv", pattern: "(" };
+  assert.equal(findRuleProblem([good, good]), null);
+  const found = findRuleProblem([good, bad, good]);
+  assert.equal(found.index, 1);
+  assert.match(found.message, /invalid pattern/);
+  assert.equal(validateRules([good, bad, good]), found.message);
+});
+
+test("findRuleProblem reports an empty website with its index", () => {
+  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
+  const found = findRuleProblem([good, { host: "  ", url: "", episodeFrom: "url" }]);
+  assert.deepEqual(found, {
+    index: 1,
+    message: "Fill in the website for this entry, or remove it.",
+    field: "host",
+  });
+});
+
+test("detectGeneric ignores a host that can never match", () => {
+  assert.equal(detectGeneric("http://myserver/anime/some-show/ep-2"), null);
+  assert.equal(detectGeneric("http://localhost/anime/some-show/ep-2").host, "localhost");
 });

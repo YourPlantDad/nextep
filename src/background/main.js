@@ -6,49 +6,93 @@ import { BUILT_IN_CLIENT_ID, resolveClient } from "../lib/config.js";
 import {
   parseUrl,
   parseTab,
+  pickEpisode,
   visitTrigger,
   hostHasRule,
   detectGeneric,
-  validateRules,
+  findRuleProblem,
   GENERIC_PATTERN,
 } from "../lib/url-parser.js";
+import { badgeText } from "../lib/badge.js";
+import { LIST_STATUSES } from "../lib/progress.js";
 import { learnRule } from "../lib/learn.js";
-import { toHttpUrl, siteHost, normalizeHost } from "../lib/template.js";
+import { toHttpUrl, siteHost, normalizeHost, cleanHost } from "../lib/template.js";
 
 const store = createStore();
 const auth = createAuth({ store });
 const api = createApi({ tokens: auth });
 
-async function notify(message) {
-  // Must never throw. By now the caller has already written to storage or MAL.
+// Opens the popup for a moment after an automatic step, if that's on and it can work. A failure
+// is not fatal: older Firefox rejects the call, and so does a window that isn't focused or is
+// fullscreen. Each reason is logged once so a missing popup can be explained.
+const skipped = (why) => console.warn(`NextEp: didn't open the popup, ${why}`);
+
+async function showRecorded(event) {
+  const { context } = event;
+  if (!context?.tabId) return;
+  if (typeof browser.browserAction.openPopup !== "function") {
+    skipped("openPopup isn't available in this browser.");
+    return;
+  }
+  const { openOnRecord } = await store.getSettings();
+  if (openOnRecord === false) return;
+  const [tab, window] = await Promise.all([
+    browser.tabs.get(context.tabId),
+    browser.windows.get(context.windowId),
+  ]);
+  if (!tab.active) {
+    skipped("the tab isn't the active tab.");
+    return;
+  }
+  if (!window.focused) {
+    skipped("the window isn't focused.");
+    return;
+  }
+  await store.setJustRecorded({
+    key: event.key,
+    count: event.count,
+    total: event.total,
+    title: event.title,
+    completed: event.completed,
+    at: Date.now(),
+  });
   try {
-    const { notifications } = await store.getSettings();
-    if (notifications === false) return;
-    await browser.notifications.create({
-      type: "basic",
-      iconUrl: browser.runtime.getURL("icons/icon.svg"),
-      title: "NextEp",
-      message,
-    });
+    await browser.browserAction.openPopup({ windowId: context.windowId });
   } catch (e) {
-    console.error("NextEp: notification failed:", e);
+    skipped(`openPopup failed: ${e?.message ?? String(e)}`);
+    // Nothing opened, so a popup opened by hand later must not show this as news.
+    await store.takeJustRecorded();
   }
 }
 
-const tracker = createTracker({ store, api, notify });
+// Only a recorded step shows anything. The other events are already visible as the badge.
+function onTrackerEvent(event) {
+  if (event.type !== "recorded") return;
+  // Not awaited. The popup's own requests go through the same queue as this call.
+  showRecorded(event).catch(() => {});
+}
+
+const tracker = createTracker({ store, api, emit: onTrackerEvent });
+
+const RECORDED_GREEN = "#2e9e5b";
+
+async function setBadge(tabId, text) {
+  await browser.browserAction.setBadgeText({ tabId, text });
+  // null puts the default colour back for this tab.
+  await browser.browserAction.setBadgeBackgroundColor({
+    tabId,
+    color: text === "✓" ? RECORDED_GREEN : null,
+  });
+}
 
 async function updateBadge(tabId, tab) {
   const { sites } = await store.getSettings();
   const parsed = parseTab(tab, sites);
-  let text = "";
-  if (parsed) {
-    if (!(await store.isSignedIn())) text = "!";
-    else {
-      const mapping = await store.getMapping(parsed.key);
-      if (!mapping || !mapping.confirmed || mapping.malId === null) text = "?";
-    }
-  }
-  await browser.browserAction.setBadgeText({ tabId, text });
+  const signedIn = parsed ? await store.isSignedIn() : false;
+  const mapping = parsed && signedIn ? ((await store.getMapping(parsed.key)) ?? null) : null;
+  const { episode } = pickEpisode(parsed, mapping?.numEpisodes ?? 0);
+  const text = badgeText({ signedIn, parsed, mapping, episode });
+  await setBadge(tabId, text);
 }
 
 async function refreshActiveBadge() {
@@ -64,7 +108,9 @@ browser.tabs.onUpdated.addListener(
       const parsed = parseTab(tab, sites);
       const trigger = visitTrigger(parsed, changeInfo);
       // Pages with no episode source are only matched when the popup opens.
-      if (trigger && parsed.source !== "none") await tracker.handleVisit(parsed, trigger);
+      if (trigger && parsed.source !== "none") {
+        await tracker.handleVisit(parsed, trigger, { tabId, windowId: tab.windowId });
+      }
     } catch (e) {
       console.error("NextEp:", e);
     }
@@ -72,6 +118,12 @@ browser.tabs.onUpdated.addListener(
   },
   { properties: ["url", "title", "status"] },
 );
+
+// Every open tab, for changes that affect all of them (sign-in and settings).
+async function refreshAllBadges() {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.filter((t) => t.url).map((t) => updateBadge(t.id, t).catch(() => {})));
+}
 
 const MATCH_FIELDS = "media_type,num_episodes,start_season";
 
@@ -102,8 +154,8 @@ const handlers = {
         state.apiError = e.message;
       }
     }
-    const mapping = parsed ? ((await store.getMapping(parsed.key)) ?? null) : null;
-    state.mapping = mapping;
+    const read = async () => (parsed ? ((await store.getMapping(parsed.key)) ?? null) : null);
+    let mapping = await read();
     if (signedIn && mapping?.malId) {
       try {
         const node = await api.details(mapping.malId, "num_episodes,my_list_status");
@@ -111,10 +163,16 @@ const handlers = {
           numEpisodes: node.num_episodes ?? 0,
           listStatus: node.my_list_status ?? null,
         };
+        // Keeps the badge and the paused flag in step with what MyAnimeList says.
+        if (mapping.confirmed) {
+          await tracker.noteListStatus(parsed.key, state.anime.listStatus);
+          mapping = await read();
+        }
       } catch (e) {
         state.apiError ??= e.message;
       }
     }
+    state.mapping = mapping;
     return state;
   },
 
@@ -122,16 +180,49 @@ const handlers = {
     if (!Number.isInteger(episodes)) throw new Error("Episode count must be a whole number.");
     const mapping = await store.getMapping(key);
     if (!mapping?.malId) throw new Error("No anime selected for this show.");
-    // The popup shows the result, so no desktop notification.
+    // The popup shows the result.
     const result = await tracker.applyProgress(mapping.malId, episodes, {
       force: force === true,
       silent: true,
+      key,
     });
     return { result };
   },
 
+  async setStatus({ key, status }) {
+    if (!LIST_STATUSES.includes(status)) throw new Error("That isn't a list status.");
+    // The popup shows the result.
+    return { result: await tracker.setStatus(key, status) };
+  },
+
+  async removeFromList({ key }) {
+    // The popup shows the result.
+    await tracker.removeFromList(key);
+    return {};
+  },
+
+  async adjustWatched({ key, delta }) {
+    if (delta !== 1 && delta !== -1) throw new Error("The change must be 1 or -1.");
+    return { result: await tracker.adjustWatched(key, delta) };
+  },
+
+  async resume({ key, episode }) {
+    if (episode != null && !Number.isInteger(episode)) {
+      throw new Error("Episode must be a whole number.");
+    }
+    return { result: await tracker.resume(key, episode ?? null) };
+  },
+
   async search({ query }) {
-    const nodes = await api.search(query, { limit: 10, fields: MATCH_FIELDS });
+    let nodes;
+    try {
+      nodes = await api.search(query, { limit: 10, fields: MATCH_FIELDS });
+    } catch (e) {
+      if (e.status === 400) {
+        throw new Error("MyAnimeList didn't accept that search. Try a longer or different name.");
+      }
+      throw e;
+    }
     return {
       results: nodes.map((n) => ({
         id: n.id,
@@ -169,7 +260,7 @@ const handlers = {
 
   async teachStart({ url, title }) {
     const page = toHttpUrl(url);
-    if (!page) throw new Error("I can only learn from http or https pages.");
+    if (!page) throw new Error("This only works on http or https pages.");
     await store.setTeach({ host: siteHost(page), url, title: String(title ?? ""), at: Date.now() });
     return {};
   },
@@ -211,7 +302,17 @@ const handlers = {
 
   async signOut() {
     await auth.signOut();
+    await tracker.clearListState();
     return {};
+  },
+
+  async getAccount() {
+    const signedIn = await store.isSignedIn();
+    return { signedIn, name: signedIn ? await auth.getUserName() : null };
+  },
+
+  async takeJustRecorded() {
+    return { recorded: await store.takeJustRecorded() };
   },
 
   async getSettings() {
@@ -223,7 +324,7 @@ const handlers = {
 
   async saveSettings({ settings }) {
     const sites = (settings.sites ?? []).map((r) => {
-      const host = String(r.host ?? "").trim().toLowerCase();
+      const host = cleanHost(r.host);
       if (r.url === undefined) return { host, pattern: String(r.pattern ?? "").trim() };
       const rule = {
         host,
@@ -234,13 +335,15 @@ const handlers = {
       if (title) rule.title = title;
       return rule;
     });
-    const problem = validateRules(sites);
-    if (problem) throw new Error(problem);
+    const problem = findRuleProblem(sites);
+    if (problem) {
+      return { ok: false, error: problem.message, index: problem.index, field: problem.field };
+    }
     const previous = await store.getSettings();
     const next = {
       clientId: String(settings.clientId ?? "").trim(),
       clientSecret: String(settings.clientSecret ?? "").trim(),
-      notifications: settings.notifications !== false,
+      openOnRecord: settings.openOnRecord !== false,
       sites,
     };
     await store.saveSettings(next);
@@ -251,6 +354,7 @@ const handlers = {
       (await store.isSignedIn())
     ) {
       await auth.signOut();
+      await tracker.clearListState();
       signedOut = true;
     }
     return { signedOut };
@@ -261,14 +365,20 @@ const handlers = {
   },
 };
 
-const mutating = new Set(["selectMapping", "setWatched", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+const mutating = new Set(["selectMapping", "setWatched", "adjustWatched", "setStatus", "removeFromList", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+
+// These change what every tab's badge shows, not just the active one.
+const allTabs = new Set(["signIn", "signOut", "saveSettings"]);
 
 browser.runtime.onMessage.addListener(async (message) => {
   try {
     const handler = handlers[message?.type];
     if (!handler) throw new Error(`Unknown message type: ${message?.type}`);
     const data = await handler(message);
-    if (mutating.has(message.type)) await refreshActiveBadge().catch(() => {});
+    if (allTabs.has(message.type)) await refreshAllBadges().catch(() => {});
+    else if (mutating.has(message.type) || message.type === "getState") {
+      await refreshActiveBadge().catch(() => {});
+    }
     return { ok: true, ...data };
   } catch (e) {
     return { ok: false, error: e?.message ?? String(e) };

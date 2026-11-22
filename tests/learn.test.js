@@ -352,3 +352,12 @@ test("i: show is an id parameter, other parameters in any order", () => {
   assert.equal(placeholder.titleName, null);
   assert.equal(placeholder.urlEpisode, 1);
 });
+
+test("a page on a single-label host is not learned", () => {
+  const res = learnRule(
+    page("http://myserver/watch/my-show/ep-1"),
+    page("http://myserver/watch/my-show/ep-2"),
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.error, /example\.tv/);
+});

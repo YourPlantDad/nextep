@@ -4,6 +4,27 @@ const $ = (id) => document.getElementById(id);
 const send = (message) => browser.runtime.sendMessage(message);
 
 let signedIn = false;
+let userName = null;
+
+const CHANGED_ELSEWHERE = "Settings were changed somewhere else. Reload this page before saving.";
+
+// Edits in the form that are not saved yet.
+let dirty = false;
+// Why Save is off, or "" when it is on. Saving then could overwrite settings with a stale or empty form.
+let blockReason = "";
+// The settings as last loaded or saved, to tell this page's own saves from changes made elsewhere.
+let baseline = "";
+let saving = false;
+
+function markDirty() {
+  dirty = true;
+}
+
+function block(reason) {
+  blockReason = reason;
+  $("save").disabled = true;
+  showError(reason);
+}
 
 function showError(text) {
   $("error").textContent = text;
@@ -32,20 +53,21 @@ const SOURCES = [
 ];
 
 function templateRow(rule) {
-  const host = input("host, e.g. example.tv", rule.host);
+  const host = input("website, e.g. example.tv", rule.host);
   const url = input("/watch/{show}/ep-{episode}", rule.url);
   const title = input("{show} Episode {episode}{anything}", rule.title);
   const from = document.createElement("select");
   for (const [value, text] of SOURCES) from.append(new Option(text, value));
   from.value = rule.episodeFrom ?? "url";
   const row = document.createElement("div");
-  row.className = "site";
+  row.className = "fields";
   row.append(
-    field("Host", host),
+    field("Website", host),
     field("Address template", url),
     field("Tab title template (optional)", title),
     field("Episode number from", from),
   );
+  row.host = host;
   row.collect = () => ({
     host: host.value,
     url: url.value,
@@ -56,39 +78,70 @@ function templateRow(rule) {
 }
 
 function patternRow(rule) {
-  const host = input("host, e.g. example.tv", rule.host);
+  const host = input("website, e.g. example.tv", rule.host);
   const pattern = input("pattern with (?<slug>) and (?<ep>)", rule.pattern);
   const row = document.createElement("div");
-  row.className = "site";
-  row.append(field("Host", host), field("Regex pattern", pattern));
+  row.className = "fields";
+  row.append(field("Website", host), field("Regex pattern", pattern));
+  row.host = host;
   row.collect = () => ({ host: host.value, pattern: pattern.value });
   return row;
 }
 
-function siteRow(rule) {
-  const row = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
-  row.append(
+// One collapsible entry. The summary shows the website and follows the field as you type.
+function siteRow(rule, { open = false } = {}) {
+  const fields = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
+  const entry = document.createElement("details");
+  entry.className = "site";
+  entry.open = open;
+  const summary = document.createElement("summary");
+  const showName = () => {
+    summary.textContent = fields.host.value.trim() || "New website";
+  };
+  showName();
+  fields.host.addEventListener("input", showName);
+  fields.append(
     Object.assign(document.createElement("button"), {
       type: "button",
       textContent: "Remove",
-      onclick: () => row.remove(),
+      onclick: () => {
+        entry.remove();
+        markDirty();
+      },
     }),
   );
-  return row;
+  entry.append(summary, fields);
+  entry.collect = fields.collect;
+  return entry;
+}
+
+// Opens only the entry that failed validation, scrolls to it and focuses the wrong field.
+// The index is the entry's position in the list that was sent. Other entries are left as they are.
+function openForError(index, field) {
+  const entry = Number.isInteger(index) ? $("sites").children[index] : null;
+  if (!entry) return;
+  entry.open = true;
+  entry.scrollIntoView({ block: "center" });
+  const target = field === "host" ? entry.querySelector("input") : entry.querySelector("input, select");
+  target?.focus();
 }
 
 function collect() {
   return {
     clientId: $("clientId").value,
     clientSecret: $("clientSecret").value,
-    notifications: $("notifications").checked,
+    openOnRecord: $("openOnRecord").checked,
     sites: [...$("sites").children].map((row) => row.collect()),
   };
 }
 
 function paintAuth() {
   $("auth").textContent = signedIn ? "Sign out" : "Sign in";
-  $("status").textContent = signedIn ? "Signed in to MyAnimeList." : "Not signed in.";
+  $("status").textContent = !signedIn
+    ? "Not signed in."
+    : userName
+      ? `Signed in as ${userName}.`
+      : "Signed in to MyAnimeList.";
 }
 
 async function run(button, fn) {
@@ -97,37 +150,104 @@ async function run(button, fn) {
   $("message").textContent = "";
   try {
     const res = await fn();
-    if (!res.ok) showError(res.error);
+    if (!res.ok) {
+      showError(res.error);
+      openForError(res.index, res.field);
+    }
     return res;
   } catch (e) {
     showError(e.message ?? String(e));
     return { ok: false };
   } finally {
-    button.disabled = false;
+    button.disabled = button === $("save") && Boolean(blockReason);
   }
 }
 
 async function refreshStatus() {
-  const state = await send({ type: "getState", url: "" });
+  let state;
+  try {
+    state = await send({ type: "getAccount" });
+  } catch {
+    state = { ok: false };
+  }
   signedIn = Boolean(state.ok && state.signedIn);
+  userName = signedIn ? (state.name ?? null) : null;
   paintAuth();
 }
 
-async function save() {
-  const res = await send({ type: "saveSettings", settings: collect() });
-  if (res.ok) {
-    $("message").textContent = res.signedOut
-      ? "Saved. You were signed out because the Client ID changed."
-      : "Saved.";
-    if (res.signedOut) await refreshStatus();
+// Fills the form from storage. Returns false, with Save off, when that fails.
+async function loadForm() {
+  let res;
+  try {
+    res = await send({ type: "getSettings" });
+  } catch (e) {
+    res = { ok: false, error: e?.message ?? String(e) };
   }
-  return res;
+  if (!res?.ok) {
+    block(res?.error || "The settings couldn't be loaded. Reload this page.");
+    return false;
+  }
+  const { settings } = res;
+  $("clientId").value = settings.clientId;
+  $("clientSecret").value = settings.clientSecret;
+  $("openOnRecord").checked = settings.openOnRecord !== false;
+  $("sites").replaceChildren(...settings.sites.map((rule) => siteRow(rule)));
+  // Only open this up front if the build has no built-in ID.
+  $("ownClient").open = !res.hasBuiltInClientId;
+  if (!res.hasBuiltInClientId) {
+    $("ownClientTitle").textContent = "Set up your own MyAnimeList API client";
+  }
+  $("noBuiltIn").hidden = res.hasBuiltInClientId;
+  baseline = JSON.stringify(settings);
+  dirty = false;
+  blockReason = "";
+  $("save").disabled = false;
+  showError("");
+  return true;
 }
+
+async function save() {
+  if (blockReason) return { ok: false, error: blockReason };
+  saving = true;
+  try {
+    const res = await send({ type: "saveSettings", settings: collect() });
+    if (res.ok) {
+      // Shows the saved values, and makes them the baseline for changes made elsewhere.
+      await loadForm();
+      $("message").textContent = res.signedOut
+        ? "Saved. You were signed out because the Client ID changed."
+        : "Saved.";
+      if (res.signedOut) await refreshStatus();
+    }
+    return res;
+  } finally {
+    saving = false;
+  }
+}
+
+// Another page (the popup, say) changed the settings while this one is open.
+async function onSettingsChanged() {
+  const res = await send({ type: "getSettings" });
+  if (!res.ok || JSON.stringify(res.settings) === baseline) return;
+  if (dirty) block(CHANGED_ELSEWHERE);
+  else await loadForm();
+}
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.settings || saving) return;
+  onSettingsChanged().catch(() => {});
+});
 
 $("save").addEventListener("click", (e) => run(e.target, save));
 
+document.addEventListener("input", markDirty);
+document.addEventListener("change", markDirty);
+
 $("addSite").addEventListener("click", () => {
-  $("sites").append(siteRow({ host: "", url: "", title: "", episodeFrom: "url" }));
+  const entry = siteRow({ host: "", url: "", title: "", episodeFrom: "url" }, { open: true });
+  $("sites").append(entry);
+  markDirty();
+  entry.querySelector("input").focus();
 });
 
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("redirect").value));
@@ -151,18 +271,11 @@ $("auth").addEventListener("click", (e) =>
 $("privacy").href = `${REPO_URL}/blob/main/PRIVACY.md`;
 $("report").href = `${REPO_URL}/issues/new/choose`;
 
-const [settings, redirect] = await Promise.all([
-  send({ type: "getSettings" }),
-  send({ type: "getRedirectUrl" }),
-]);
-if (settings.ok) {
-  $("clientId").value = settings.settings.clientId;
-  $("clientSecret").value = settings.settings.clientSecret;
-  $("notifications").checked = settings.settings.notifications !== false;
-  $("sites").replaceChildren(...settings.settings.sites.map(siteRow));
-  // Only open this up front if the build has no built-in ID.
-  $("advanced").open = !settings.hasBuiltInClientId;
-  $("noBuiltIn").hidden = settings.hasBuiltInClientId;
-} else showError(settings.error);
-if (redirect.ok) $("redirect").value = redirect.url;
+await loadForm();
+try {
+  const redirect = await send({ type: "getRedirectUrl" });
+  if (redirect.ok) $("redirect").value = redirect.url;
+} catch {
+  // The redirect address is only shown for copying.
+}
 await refreshStatus();

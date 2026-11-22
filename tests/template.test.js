@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compileTemplate, matchTemplate, validateTemplate } from "../src/lib/template.js";
+import { compileTemplate, matchTemplate, validateTemplate, cleanHost, isHostname, siteHost } from "../src/lib/template.js";
 
 const url = (template, text) => matchTemplate(compileTemplate(template, "url"), text);
 const title = (template, text) => matchTemplate(compileTemplate(template, "title"), text);
@@ -135,4 +135,33 @@ test("a title template can put the show after the number", () => {
 
 test("a block inside a parameter name can't be compiled", () => {
   assert.equal(compileTemplate("/w?{show}=1", "url"), null);
+});
+
+test("cleanHost reduces addresses and paths to a hostname", () => {
+  assert.equal(cleanHost("example.tv"), "example.tv");
+  assert.equal(cleanHost("  Example.TV "), "example.tv");
+  assert.equal(cleanHost("https://example.tv"), "example.tv");
+  assert.equal(cleanHost("https://www.Example.tv:8080/watch/x?y=1"), "example.tv");
+  assert.equal(cleanHost("example.tv/"), "example.tv");
+  assert.equal(cleanHost("www.example.tv/watch"), "example.tv");
+  assert.equal(cleanHost("www.example.tv"), "example.tv");
+  assert.equal(cleanHost("localhost"), "localhost");
+});
+
+test("cleanHost leaves unusable text for isHostname to reject", () => {
+  for (const text of ["", "https://", "not a host", "example", "exa mple.tv", "example..tv", ".tv"]) {
+    assert.equal(isHostname(cleanHost(text)), false, JSON.stringify(text));
+  }
+});
+
+test("isHostname accepts names with a dot, and localhost", () => {
+  for (const text of ["example.tv", "a-b.example.co.uk", "192.168.1.5", "localhost"]) {
+    assert.equal(isHostname(text), true, text);
+  }
+  assert.equal(isHostname("Example.tv"), false);
+  assert.equal(isHostname("exa_mple.tv"), false);
+});
+
+test("siteHost uses the same clean-up", () => {
+  assert.equal(siteHost(new URL("https://WWW.Example.tv/x")), "example.tv");
 });
