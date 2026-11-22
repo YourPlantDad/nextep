@@ -31,7 +31,7 @@ let loads = 0;
 // Installs fresh fakes, then loads a fresh copy of main.js.
 async function boot({ anime, sites = [ADDRESS_RULE], settings = {}, storage = {}, signedIn = true, tabs, windows } = {}) {
   const base = {
-    settings: { clientId: "", clientSecret: "", openOnRecord: true, sites, ...settings },
+    settings: { openOnRecord: true, sites, ...settings },
     ...(signedIn
       ? { auth: { accessToken: "token", refreshToken: "refresh", expiresAt: Date.now() + 30 * 24 * 3600 * 1000 } }
       : {}),
@@ -198,7 +198,6 @@ test("teach flow with an episode 1 page and an episode 2 page stores a new-style
   assert.equal(res.episodeFrom, "url");
   assert.equal(res.rule.host, HOST);
   assert.equal(res.rule.url, "/watch/{show}/episode-{episode}");
-  assert.equal(typeof res.rule.pattern, "undefined");
   assert.deepEqual(env.data.settings.sites, [res.rule]);
   assert.equal(env.data.teach, undefined);
 });
@@ -258,8 +257,6 @@ test("saveSettings with a broken template fails and leaves stored settings uncha
   const res = await env.send({
     type: "saveSettings",
     settings: {
-      clientId: "",
-      clientSecret: "",
       openOnRecord: true,
       sites: [{ host: HOST, url: "/watch/{show}/ep-{bogus}", episodeFrom: "url" }],
     },
@@ -287,7 +284,7 @@ test("saveSettings with a valid template stores it", async () => {
   const env = await boot();
   const sites = [{ host: "Example.TV", url: "/v/{show}/{episode}", episodeFrom: "url" }];
   const res = await env.send({ type: "saveSettings", settings: { openOnRecord: false, sites } });
-  assert.deepEqual(res, { ok: true, signedOut: false });
+  assert.deepEqual(res, { ok: true });
   assert.equal(env.data.settings.sites[0].host, "example.tv");
   assert.equal(env.data.settings.openOnRecord, false);
 });
@@ -488,11 +485,86 @@ test("signOut strips cached list state and keeps which anime the show is", async
   assert.deepEqual(env.data.mappings[KEY], CONFIRMED);
 });
 
-test("a Client ID change signs out and strips cached list state", async () => {
-  const env = await boot({ storage: seedMapping(CACHED) });
-  const res = await env.send({ type: "saveSettings", settings: { clientId: "own-client-id", sites: [] } });
-  assert.deepEqual(res, { ok: true, signedOut: true });
-  assert.deepEqual(env.data.mappings[KEY], CONFIRMED);
+test("an old stored Client ID and secret are ignored and not written back", async () => {
+  const env = await boot({ settings: { clientId: "old-id", clientSecret: "old-secret" } });
+  const settings = await env.send({ type: "getSettings" });
+  assert.deepEqual(Object.keys(settings.settings).sort(), ["openOnRecord", "sites"]);
+  const res = await env.send({
+    type: "saveSettings",
+    settings: { clientId: "other", clientSecret: "other", openOnRecord: true, sites: [ADDRESS_RULE] },
+  });
+  assert.deepEqual(res, { ok: true });
+  assert.deepEqual(env.data.settings, { openOnRecord: true, sites: [ADDRESS_RULE] });
+  assert.ok(env.data.auth, "still signed in");
+});
+
+const OLD_RULE = { host: "old.example.tv", pattern: "^/watch/(?<slug>[^/]+)/ep-(?<ep>[0-9]+)" };
+
+test("on start, stored rules without an address template are removed in one write", async () => {
+  const stored = { settings: { openOnRecord: false, sites: [OLD_RULE, ADDRESS_RULE, TITLE_RULE] } };
+  const fake = createBrowser({ storage: stored });
+  let writes = 0;
+  const set = fake.browser.storage.local.set;
+  fake.browser.storage.local.set = async (obj) => {
+    writes++;
+    return set(obj);
+  };
+  globalThis.browser = fake.browser;
+  globalThis.fetch = createMal().fetch;
+  await import(pathToFileURL(MAIN).href + "?t=" + ++loads);
+  await settle();
+  assert.equal(writes, 1);
+  assert.deepEqual(fake.data.settings, { openOnRecord: false, sites: [ADDRESS_RULE, TITLE_RULE] });
+});
+
+test("on start, nothing is written when every stored rule has an address template", async () => {
+  const fake = createBrowser({ storage: { settings: { openOnRecord: true, sites: [ADDRESS_RULE] } } });
+  let writes = 0;
+  const set = fake.browser.storage.local.set;
+  fake.browser.storage.local.set = async (obj) => {
+    writes++;
+    return set(obj);
+  };
+  globalThis.browser = fake.browser;
+  globalThis.fetch = createMal().fetch;
+  await import(pathToFileURL(MAIN).href + "?t=" + ++loads);
+  await settle();
+  assert.equal(writes, 0);
+});
+
+test("on start, removing old rules leaves matches and last-seen entries alone", async () => {
+  const oldKey = "old.example.tv|my-show";
+  const storage = {
+    mappings: { [oldKey]: { ...CONFIRMED } },
+    lastSeen: { [oldKey]: { episode: 4, at: 1 } },
+  };
+  const env = await boot({ sites: [OLD_RULE], storage });
+  await settle();
+  assert.deepEqual(env.data.settings.sites, []);
+  assert.deepEqual(env.data.mappings, storage.mappings);
+  assert.deepEqual(env.data.lastSeen, storage.lastSeen);
+  // The old rule never shows up as a site that is enabled.
+  const state = await env.send({ type: "getState", url: "https://old.example.tv/watch/my-show/ep-5", title: "" });
+  assert.equal(state.hostHasRule, false);
+  assert.equal(state.parsed, null);
+});
+
+test("enableSite stores an address template rule and records the page", async () => {
+  const env = await boot({ sites: [] });
+  const url = `https://www.${HOST}/watch/my-show-123/ep-4?lang=en`;
+  const state = await env.send({ type: "getState", url, title: "" });
+  assert.deepEqual(state.generic, {
+    host: HOST,
+    slug: "my-show-123",
+    episode: 4,
+    rule: { host: HOST, url: "/watch/{show}/ep-{episode}", episodeFrom: "url" },
+  });
+  const res = await env.send({ type: "enableSite", url });
+  assert.equal(res.ok, true, res.error);
+  assert.deepEqual(env.data.settings.sites, [{ host: HOST, url: "/watch/{show}/ep-{episode}", episodeFrom: "url" }]);
+  assert.equal(env.data.lastSeen[`${HOST}|my-show-123`].episode, 4);
+  const bad = await env.send({ type: "enableSite", url: `https://${HOST}/about` });
+  assert.equal(bad.ok, false);
 });
 
 test("a search that MyAnimeList rejects gets a plain message", async () => {
