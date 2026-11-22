@@ -269,6 +269,20 @@ test("saveSettings with a broken template fails and leaves stored settings uncha
   assert.deepEqual(env.data.settings, before);
 });
 
+test("saveSettings with a broken second rule reports its index and stores nothing", async () => {
+  const env = await boot();
+  const before = structuredClone(env.data.settings);
+  const sites = [
+    { host: "example.tv", url: "/v/{show}/{episode}", episodeFrom: "url" },
+    { host: "", url: "/v/{show}/{episode}", episodeFrom: "url" },
+  ];
+  const res = await env.send({ type: "saveSettings", settings: { sites } });
+  assert.equal(res.ok, false);
+  assert.equal(res.index, 1);
+  assert.equal(res.error, "Fill in the website for this entry, or remove it.");
+  assert.deepEqual(env.data.settings, before);
+});
+
 test("saveSettings with a valid template stores it", async () => {
   const env = await boot();
   const sites = [{ host: "Example.TV", url: "/v/{show}/{episode}", episodeFrom: "url" }];
@@ -441,6 +455,22 @@ test("justRecorded is cleared when the popup can't be opened", async () => {
   assert.equal(env.calls.openPopup.length, 0);
   assert.equal(env.data.justRecorded, undefined);
   assert.deepEqual(await env.send({ type: "takeJustRecorded" }), { ok: true, recorded: null });
+});
+
+test("a rejecting openPopup logs a warning", async () => {
+  const tab = page(watchUrl(5));
+  const env = await boot({ tabs: [tab], windows: [{ id: 1, focused: true }] });
+  env.behavior.openPopupFails = true;
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    await stepTo5(env, tab);
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^NextEp: didn't open the popup, openPopup failed: openPopup failed/);
 });
 
 const CACHED = {

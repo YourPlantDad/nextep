@@ -8,6 +8,7 @@ import {
   hostHasRule,
   detectGeneric,
   validateRules,
+  findRuleProblem,
   DEFAULT_RULES,
 } from "../src/lib/url-parser.js";
 
@@ -232,6 +233,26 @@ test("validateRules rejects a website that is not a hostname", () => {
   for (const host of ["https://example.tv", "example", "not a host", "example.tv/watch"]) {
     assert.equal(validateRules([rule(host)]), `${host}: the website should look like example.tv.`);
   }
+});
+
+test("findRuleProblem reports the index of a bad rule in the middle of a list", () => {
+  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
+  const bad = { host: "b.tv", pattern: "(" };
+  assert.equal(findRuleProblem([good, good]), null);
+  const found = findRuleProblem([good, bad, good]);
+  assert.equal(found.index, 1);
+  assert.match(found.message, /invalid pattern/);
+  assert.equal(validateRules([good, bad, good]), found.message);
+});
+
+test("findRuleProblem reports an empty website with its index", () => {
+  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
+  const found = findRuleProblem([good, { host: "  ", url: "", episodeFrom: "url" }]);
+  assert.deepEqual(found, {
+    index: 1,
+    message: "Fill in the website for this entry, or remove it.",
+    field: "host",
+  });
 });
 
 test("detectGeneric ignores a host that can never match", () => {

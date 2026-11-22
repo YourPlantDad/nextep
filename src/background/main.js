@@ -10,7 +10,7 @@ import {
   visitTrigger,
   hostHasRule,
   detectGeneric,
-  validateRules,
+  findRuleProblem,
   GENERIC_PATTERN,
 } from "../lib/url-parser.js";
 import { badgeText } from "../lib/badge.js";
@@ -22,19 +22,32 @@ const store = createStore();
 const auth = createAuth({ store });
 const api = createApi({ tokens: auth });
 
-// Opens the popup for a moment after an automatic step, if that's on and it can work. Every
-// failure is ignored: older Firefox rejects the call, and so does a window that isn't focused
-// or is fullscreen.
+// Opens the popup for a moment after an automatic step, if that's on and it can work. A failure
+// is not fatal: older Firefox rejects the call, and so does a window that isn't focused or is
+// fullscreen. Each reason is logged once so a missing popup can be explained.
+const skipped = (why) => console.warn(`NextEp: didn't open the popup, ${why}`);
+
 async function showRecorded(event) {
   const { context } = event;
-  if (!context?.tabId || typeof browser.browserAction.openPopup !== "function") return;
+  if (!context?.tabId) return;
+  if (typeof browser.browserAction.openPopup !== "function") {
+    skipped("openPopup isn't available in this browser.");
+    return;
+  }
   const { openOnRecord } = await store.getSettings();
   if (openOnRecord === false) return;
   const [tab, window] = await Promise.all([
     browser.tabs.get(context.tabId),
     browser.windows.get(context.windowId),
   ]);
-  if (!tab.active || !window.focused) return;
+  if (!tab.active) {
+    skipped("the tab isn't the active tab.");
+    return;
+  }
+  if (!window.focused) {
+    skipped("the window isn't focused.");
+    return;
+  }
   await store.setJustRecorded({
     key: event.key,
     count: event.count,
@@ -45,7 +58,8 @@ async function showRecorded(event) {
   });
   try {
     await browser.browserAction.openPopup({ windowId: context.windowId });
-  } catch {
+  } catch (e) {
+    skipped(`openPopup failed: ${e?.message ?? String(e)}`);
     // Nothing opened, so a popup opened by hand later must not show this as news.
     await store.takeJustRecorded();
   }
@@ -321,8 +335,10 @@ const handlers = {
       if (title) rule.title = title;
       return rule;
     });
-    const problem = validateRules(sites);
-    if (problem) throw new Error(problem);
+    const problem = findRuleProblem(sites);
+    if (problem) {
+      return { ok: false, error: problem.message, index: problem.index, field: problem.field };
+    }
     const previous = await store.getSettings();
     const next = {
       clientId: String(settings.clientId ?? "").trim(),

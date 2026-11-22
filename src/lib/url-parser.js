@@ -153,29 +153,41 @@ function validateTemplateRule(rule, label) {
   return null;
 }
 
-// Returns an error message, or null if every rule works.
-export function validateRules(rules) {
-  if (!Array.isArray(rules)) return "Site rules must be a list.";
-  for (const rule of rules) {
+// Returns the first problem as { index, message, field }, or null if every rule works.
+// index is the position of the failing rule, or null when the list itself is wrong.
+// field is "host" when the website is the wrong part.
+export function findRuleProblem(rules) {
+  if (!Array.isArray(rules)) {
+    return { index: null, message: "Site rules must be a list.", field: null };
+  }
+  for (const [index, rule] of rules.entries()) {
     const label = rule?.host || "(no website)";
+    const fail = (message, field = null) => ({ index, message, field });
     if (typeof rule?.host !== "string" || !rule.host.trim()) {
-      return "Every site rule needs a website.";
+      return fail("Fill in the website for this entry, or remove it.", "host");
     }
-    if (!isHostname(rule.host)) return `${label}: the website should look like example.tv.`;
+    if (!isHostname(rule.host)) {
+      return fail(`${label}: the website should look like example.tv.`, "host");
+    }
     if (rule.url !== undefined) {
       const problem = validateTemplateRule(rule, label);
-      if (problem) return problem;
+      if (problem) return fail(problem);
       continue;
     }
-    if (typeof rule.pattern !== "string") return `${label}: pattern is missing.`;
+    if (typeof rule.pattern !== "string") return fail(`${label}: pattern is missing.`);
     try {
       new RegExp(rule.pattern);
     } catch (e) {
-      return `${label}: invalid pattern (${e.message}).`;
+      return fail(`${label}: invalid pattern (${e.message}).`);
     }
     if (!rule.pattern.includes("(?<slug>") || !rule.pattern.includes("(?<ep>")) {
-      return `${label}: pattern needs both (?<slug>...) and (?<ep>...) groups.`;
+      return fail(`${label}: pattern needs both (?<slug>...) and (?<ep>...) groups.`);
     }
   }
   return null;
+}
+
+// Returns an error message, or null if every rule works.
+export function validateRules(rules) {
+  return findRuleProblem(rules)?.message ?? null;
 }

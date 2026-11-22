@@ -112,16 +112,18 @@ function siteRow(rule, { open = false } = {}) {
   );
   entry.append(summary, fields);
   entry.collect = fields.collect;
-  entry.websiteName = () => fields.host.value.trim().toLowerCase();
   return entry;
 }
 
-// A validation message starts with the website's name. Open that entry, or all of them
-// if none matches.
-function openForError(text) {
-  const entries = [...$("sites").children];
-  const named = entries.filter((e) => e.websiteName() && text.startsWith(e.websiteName() + ":"));
-  for (const e of named.length > 0 ? named : entries) e.open = true;
+// Opens only the entry that failed validation, scrolls to it and focuses the wrong field.
+// The index is the entry's position in the list that was sent. Other entries are left as they are.
+function openForError(index, field) {
+  const entry = Number.isInteger(index) ? $("sites").children[index] : null;
+  if (!entry) return;
+  entry.open = true;
+  entry.scrollIntoView({ block: "center" });
+  const target = field === "host" ? entry.querySelector("input") : entry.querySelector("input, select");
+  target?.focus();
 }
 
 function collect() {
@@ -150,7 +152,7 @@ async function run(button, fn) {
     const res = await fn();
     if (!res.ok) {
       showError(res.error);
-      openForError(res.error ?? "");
+      openForError(res.index, res.field);
     }
     return res;
   } catch (e) {
