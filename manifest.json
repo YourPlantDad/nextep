@@ -19,6 +19,7 @@
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
   },
+  "incognito": "not_allowed",
   "permissions": [
     "tabs",
     "storage",
