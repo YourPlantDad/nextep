@@ -9,6 +9,7 @@ export function createBrowser({ storage = {}, tabs = [], windows = [] } = {}) {
   const windowMap = new Map(windows.map((w) => [w.id, w]));
   const calls = { badgeText: [], badgeColor: [], openPopup: [] };
   const listeners = { onUpdated: [], onMessage: [] };
+  const behavior = { openPopupFails: false };
   const redirectUrl = "https://redirect.example.test/cb";
 
   const keysOf = (keys) => (keys == null ? Object.keys(data) : [].concat(keys));
@@ -66,6 +67,7 @@ export function createBrowser({ storage = {}, tabs = [], windows = [] } = {}) {
         calls.badgeColor.push(clone(details));
       },
       async openPopup(details) {
+        if (behavior.openPopupFails) throw new Error("openPopup failed");
         calls.openPopup.push(clone(details));
       },
     },
@@ -82,6 +84,7 @@ export function createBrowser({ storage = {}, tabs = [], windows = [] } = {}) {
     browser,
     data,
     calls,
+    behavior,
     listeners,
     tabs: tabMap,
     windows: windowMap,
@@ -102,6 +105,7 @@ const json = (body, status = 200) =>
 export function createMal({ anime = [], userName = "ExampleUser" } = {}) {
   const model = new Map(anime.map((a) => [a.id, structuredClone(a)]));
   const requests = [];
+  const failures = [];
 
   const node = (a) => ({
     id: a.id,
@@ -117,6 +121,11 @@ export function createMal({ anime = [], userName = "ExampleUser" } = {}) {
     const method = (init.method ?? "GET").toUpperCase();
     const body = init.body === undefined ? null : String(init.body);
     requests.push({ method, url: url.href, path: url.pathname, query: url.searchParams, body });
+    const hit = failures.findIndex((f) => f.method === method && f.path.test(url.pathname));
+    if (hit >= 0) {
+      const [{ status }] = failures.splice(hit, 1);
+      return json({ error: "failed" }, status);
+    }
     const form = body ? new URLSearchParams(body) : new URLSearchParams();
 
     if (url.host === "myanimelist.net" && url.pathname === "/v1/oauth2/token") {
@@ -159,5 +168,8 @@ export function createMal({ anime = [], userName = "ExampleUser" } = {}) {
       .filter((r) => r.method === "PATCH")
       .map((r) => ({ path: r.path, form: Object.fromEntries(new URLSearchParams(r.body)) }));
 
-  return { fetch, requests, model, patches };
+  // The next matching request answers with this status instead.
+  const failNext = (method, path, status) => failures.push({ method, path, status });
+
+  return { fetch, requests, model, patches, failNext };
 }

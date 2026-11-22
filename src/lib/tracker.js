@@ -81,11 +81,13 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
 
   // Keeps the last list status read from MAL on the mapping, for the badge, and keeps
   // `paused` in step with it. pausedAtLeast raises the episode waiting to be recorded.
-  async function recordList(key, status, watched, { pausedAtLeast = 0 } = {}) {
+  // clearRecorded drops the "recorded" mark, for changes the user made by hand.
+  async function recordList(key, status, watched, { pausedAtLeast = 0, clearRecorded = false } = {}) {
     if (!key) return;
     const mapping = await store.getMapping(key);
     if (!mapping) return;
     const next = { ...mapping, listStatus: status ? { status, watched } : null };
+    if (clearRecorded) delete next.lastRecorded;
     if (isPaused(status)) {
       next.paused = status;
       const episode = Math.max(mapping.pausedEpisode ?? 0, pausedAtLeast);
@@ -120,7 +122,9 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
       return { updated: false, skip: plan.skip, numEpisodes };
     }
     const listStatus = await api.updateStatus(malId, plan.body);
-    await recordList(key, plan.body.status ?? current?.status, plan.body.num_watched_episodes);
+    await recordList(key, plan.body.status ?? current?.status, plan.body.num_watched_episodes, {
+      clearRecorded: force,
+    });
     if (!silent) {
       const count = plan.body.num_watched_episodes ?? current?.num_episodes_watched ?? 0;
       if (key && pageEpisode != null) {
@@ -156,8 +160,21 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
       status,
       num_watched_episodes: count,
     });
-    await recordList(key, status, count);
+    await recordList(key, status, count, { clearRecorded: true });
     return { updated: true, numEpisodes: total, listStatus };
+  }
+
+  // Applies a change to the count as it is now, not as a page read it earlier.
+  async function adjustWatchedNow(key, delta) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const current = node.my_list_status?.num_episodes_watched ?? 0;
+    let target = Math.max(0, current + delta);
+    if (total > 0) target = Math.min(target, total);
+    if (target === current) return { updated: false, skip: "unchanged", numEpisodes: total };
+    return applyProgressNow(mapping.malId, target, { force: true, silent: true, key });
   }
 
   async function setStatusNow(key, status) {
@@ -170,7 +187,7 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
     if (status === "completed" && total > 0) body.num_watched_episodes = total;
     const listStatus = await api.updateStatus(mapping.malId, body);
     const watched = body.num_watched_episodes ?? node.my_list_status?.num_episodes_watched ?? 0;
-    await recordList(key, status, watched);
+    await recordList(key, status, watched, { clearRecorded: true });
     return { updated: true, numEpisodes: total, listStatus };
   }
 
@@ -180,6 +197,7 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
     await api.removeStatus(mapping.malId);
     // The mapping stays. Only the cached list state goes.
     const next = { ...mapping, listStatus: null };
+    delete next.lastRecorded;
     delete next.paused;
     delete next.pausedEpisode;
     await store.setMapping(key, next);
@@ -232,17 +250,24 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
 
     const prev = await store.getLastSeen(key);
     await store.setLastSeen(key, { episode, at: now() });
-    if (!(await store.isSignedIn())) return;
-    const step = Boolean(prev) && episode === prev.episode + 1;
-    if (!known) {
-      // With a title template, the title that follows the page load names the show better.
-      // A step still needs the mapping now, so that one goes by the slug alone.
-      const waitForTitle = parsed.hasTitleTemplate && trigger === "url" && !step;
-      if (!waitForTitle) {
-        await ensureMappingNow(key, slug, trigger === "title" ? titleName : null);
+    try {
+      if (!(await store.isSignedIn())) return;
+      const step = Boolean(prev) && episode === prev.episode + 1;
+      if (!known) {
+        // With a title template, the title that follows the page load names the show better.
+        // A step still needs the mapping now, so that one goes by the slug alone.
+        const waitForTitle = parsed.hasTitleTemplate && trigger === "url" && !step;
+        if (!waitForTitle) {
+          await ensureMappingNow(key, slug, trigger === "title" ? titleName : null);
+        }
       }
+      if (step) await markWatched(key, prev.episode, { pageEpisode: episode, context });
+    } catch (e) {
+      // The step wasn't recorded, so the next event for this page has to count as one again.
+      if (prev) await store.setLastSeen(key, prev);
+      else await store.clearLastSeen(key);
+      throw e;
     }
-    if (step) await markWatched(key, prev.episode, { pageEpisode: episode, context });
   }
 
   async function ensureMappingNow(key, slug, titleName) {
@@ -279,6 +304,8 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
     applyProgress: (malId, n, options) => enqueue(() => applyProgressNow(malId, n, options)),
     selectMapping: (key, malId) => enqueue(() => selectMappingNow(key, malId)),
     resume: (key, episode) => enqueue(() => resumeNow(key, episode)),
+    adjustWatched: (key, delta) => enqueue(() => adjustWatchedNow(key, delta)),
+    clearListState: () => enqueue(() => store.clearListState()),
     setStatus: (key, status) => enqueue(() => setStatusNow(key, status)),
     removeFromList: (key) => enqueue(() => removeFromListNow(key)),
     noteListStatus: (key, listStatus) => enqueue(() => noteListStatusNow(key, listStatus)),

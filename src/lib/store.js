@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS = {
   sites: DEFAULT_RULES,
 };
 
+const LIST_FIELDS = ["listStatus", "paused", "pausedEpisode", "lastRecorded", "pendingEpisode"];
+
 export function createStore(area) {
   const storage = () => area ?? browser.storage.local;
 
@@ -39,6 +41,20 @@ export function createStore(area) {
     setMapping: (key, mapping) => writeMap("mappings", key, mapping),
     getLastSeen: (key) => readMap("lastSeen", key),
     setLastSeen: (key, value) => writeMap("lastSeen", key, value),
+    async clearLastSeen(key) {
+      const map = (await read("lastSeen")) ?? {};
+      delete map[key];
+      await storage().set({ lastSeen: map });
+    },
+    // Drops what was read from one account's list. Which anime a show is stays.
+    async clearListState() {
+      const map = await read("mappings");
+      if (!map) return;
+      for (const mapping of Object.values(map)) {
+        for (const field of LIST_FIELDS) delete mapping[field];
+      }
+      await storage().set({ mappings: map });
+    },
     async takeJustRecorded() {
       const value = (await read("justRecorded")) ?? null;
       if (value) await storage().remove("justRecorded");

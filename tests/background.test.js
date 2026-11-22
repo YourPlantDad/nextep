@@ -277,3 +277,208 @@ test("saveSettings with a valid template stores it", async () => {
   assert.equal(env.data.settings.sites[0].host, "example.tv");
   assert.equal(env.data.settings.openOnRecord, false);
 });
+
+const CONFIRMED = { malId: 1, title: "My Show", numEpisodes: 12, confirmed: true, candidates: [] };
+const seedMapping = (extra = {}) => ({ mappings: { [KEY]: { ...CONFIRMED, ...extra } } });
+const listed = (n, status = "watching") => ({
+  id: 1,
+  title: "My Show",
+  num_episodes: 12,
+  list: { status, num_episodes_watched: n },
+});
+const stepTo5 = async (env, tab) => {
+  await env.tabEvent(1, { url: watchUrl(4) }, page(watchUrl(4)));
+  await env.tabEvent(1, { url: watchUrl(5) }, tab);
+};
+
+test("a failed update keeps the step, so the next event for the page records it", async () => {
+  const tab = page(watchUrl(5));
+  const env = await boot({ tabs: [tab], settings: { openOnRecord: false } });
+  await env.tabEvent(1, { url: watchUrl(4) }, page(watchUrl(4)));
+  env.mal.failNext("PATCH", /my_list_status$/, 500);
+  const log = console.error;
+  console.error = () => {};
+  try {
+    await env.tabEvent(1, { url: watchUrl(5) }, tab);
+  } finally {
+    console.error = log;
+  }
+  assert.equal(env.mal.model.get(1).list, undefined);
+  assert.equal(env.data.lastSeen[KEY].episode, 4);
+
+  await env.tabEvent(1, { status: "complete" }, tab);
+  assert.deepEqual(env.mal.model.get(1).list, { status: "watching", num_episodes_watched: 4 });
+  assert.equal(env.data.lastSeen[KEY].episode, 5);
+});
+
+test("a failed first visit leaves no last-seen entry behind", async () => {
+  const env = await boot();
+  env.mal.failNext("GET", /\/v2\/anime$/, 500);
+  const log = console.error;
+  console.error = () => {};
+  try {
+    await env.tabEvent(1, { url: watchUrl(4) }, page(watchUrl(4)));
+  } finally {
+    console.error = log;
+  }
+  assert.equal(env.data.lastSeen?.[KEY], undefined);
+});
+
+test("getState refreshes the badge of the active tab", async () => {
+  const tab = page(watchUrl(5));
+  const env = await boot({ tabs: [tab], anime: [listed(2, "on_hold")], storage: seedMapping() });
+  assert.equal(env.calls.badgeText.length, 0);
+  const state = await env.send({ type: "getState", url: watchUrl(5), title: "" });
+  assert.equal(state.mapping.paused, "on_hold");
+  assert.equal(env.lastBadge(1), "II");
+});
+
+const other = () => page("https://other.example.test/", "", { id: 1 });
+const background = () => page(watchUrl(5), "", { id: 2, active: false });
+
+test("signOut refreshes the badge of a tab that is not active", async () => {
+  const env = await boot({ tabs: [other(), background()], storage: seedMapping() });
+  assert.equal((await env.send({ type: "signOut" })).ok, true);
+  assert.equal(env.lastBadge(2), "!");
+});
+
+test("signIn refreshes the badge of a tab that is not active", async () => {
+  const env = await boot({ tabs: [other(), background()], storage: seedMapping(), signedIn: false });
+  const res = await env.send({ type: "signIn" });
+  assert.equal(res.ok, true, res.error);
+  assert.equal(env.lastBadge(2), "");
+});
+
+test("saveSettings refreshes the badge of a tab that is not active", async () => {
+  const env = await boot({ tabs: [other(), background()], sites: [] });
+  assert.equal(env.lastBadge(2), undefined);
+  const res = await env.send({ type: "saveSettings", settings: { sites: [ADDRESS_RULE] } });
+  assert.equal(res.ok, true, res.error);
+  assert.equal(env.lastBadge(2), "?");
+});
+
+const handActions = {
+  removeFromList: (env) => env.send({ type: "removeFromList", key: KEY }),
+  setStatus: (env) => env.send({ type: "setStatus", key: KEY, status: "plan_to_watch" }),
+  "a forced setWatched": (env) => env.send({ type: "setWatched", key: KEY, episodes: 2, force: true }),
+  resume: (env) => env.send({ type: "resume", key: KEY }),
+};
+for (const [name, act] of Object.entries(handActions)) {
+  test(`the check mark goes away after ${name}`, async () => {
+    const tab = page(watchUrl(5));
+    const env = await boot({ tabs: [tab], settings: { openOnRecord: false } });
+    await stepTo5(env, tab);
+    assert.equal(env.lastBadge(1), "✓");
+    const res = await act(env);
+    assert.equal(res.ok, true, res.error);
+    assert.notEqual(env.lastBadge(1), "✓");
+    assert.equal(env.data.mappings[KEY].lastRecorded, undefined);
+  });
+}
+
+test("adjustWatched applies to the current count, not one read earlier", async () => {
+  const env = await boot({ anime: [listed(5)], storage: seedMapping() });
+  // Another tab records an episode after the popup read 5.
+  env.mal.model.get(1).list.num_episodes_watched = 6;
+  const res = await env.send({ type: "adjustWatched", key: KEY, delta: -1 });
+  assert.equal(res.ok, true, res.error);
+  assert.equal(env.mal.patches().length, 1);
+  assert.equal(env.mal.patches()[0].form.num_watched_episodes, "5");
+  assert.equal(env.mal.model.get(1).list.num_episodes_watched, 5);
+
+  await env.send({ type: "adjustWatched", key: KEY, delta: 1 });
+  assert.equal(env.mal.model.get(1).list.num_episodes_watched, 6);
+});
+
+test("adjustWatched stays between zero and the total", async () => {
+  const low = await boot({ anime: [listed(0)], storage: seedMapping() });
+  assert.equal((await low.send({ type: "adjustWatched", key: KEY, delta: -1 })).ok, true);
+  assert.equal(low.mal.patches().length, 0);
+
+  const high = await boot({ anime: [listed(12, "completed")], storage: seedMapping() });
+  assert.equal((await high.send({ type: "adjustWatched", key: KEY, delta: 1 })).ok, true);
+  assert.equal(high.mal.patches().length, 0);
+});
+
+test("adjustWatched rejects a change other than 1 or -1", async () => {
+  const env = await boot({ anime: [listed(5)], storage: seedMapping() });
+  for (const delta of [0, 2, -2, "1", 1.5, null, undefined]) {
+    const res = await env.send({ type: "adjustWatched", key: KEY, delta });
+    assert.equal(res.ok, false, String(delta));
+  }
+  assert.equal(env.mal.patches().length, 0);
+});
+
+test("saveSettings reduces a website entry to its hostname", async () => {
+  const env = await boot();
+  for (const host of ["https://Example.tv/watch", "example.tv/", "www.example.tv/watch", "WWW.Example.TV", "localhost"]) {
+    const sites = [{ host, url: "/v/{show}/{episode}", episodeFrom: "url" }];
+    const res = await env.send({ type: "saveSettings", settings: { sites } });
+    assert.equal(res.ok, true, `${host}: ${res.error}`);
+    const expected = host === "localhost" ? "localhost" : "example.tv";
+    assert.equal(env.data.settings.sites[0].host, expected, host);
+  }
+});
+
+test("saveSettings rejects a website that can never match", async () => {
+  const env = await boot();
+  const before = structuredClone(env.data.settings);
+  for (const host of ["not a host", "example", "https://"]) {
+    const sites = [{ host, url: "/v/{show}/{episode}", episodeFrom: "url" }];
+    const res = await env.send({ type: "saveSettings", settings: { sites } });
+    assert.equal(res.ok, false, host);
+    assert.match(res.error, /: the website should look like example\.tv\.$/);
+  }
+  assert.deepEqual(env.data.settings, before);
+});
+
+test("justRecorded is cleared when the popup can't be opened", async () => {
+  const tab = page(watchUrl(5));
+  const env = await boot({ tabs: [tab], windows: [{ id: 1, focused: true }] });
+  env.behavior.openPopupFails = true;
+  await stepTo5(env, tab);
+  assert.equal(env.mal.patches().length, 1);
+  assert.equal(env.calls.openPopup.length, 0);
+  assert.equal(env.data.justRecorded, undefined);
+  assert.deepEqual(await env.send({ type: "takeJustRecorded" }), { ok: true, recorded: null });
+});
+
+const CACHED = {
+  listStatus: { status: "on_hold", watched: 2 },
+  paused: "on_hold",
+  pausedEpisode: 4,
+  lastRecorded: { pageEpisode: 5, count: 4, at: 1 },
+  pendingEpisode: 3,
+};
+
+test("signOut strips cached list state and keeps which anime the show is", async () => {
+  const env = await boot({ storage: seedMapping(CACHED) });
+  assert.equal((await env.send({ type: "signOut" })).ok, true);
+  assert.equal(env.data.auth, undefined);
+  assert.deepEqual(env.data.mappings[KEY], CONFIRMED);
+});
+
+test("a Client ID change signs out and strips cached list state", async () => {
+  const env = await boot({ storage: seedMapping(CACHED) });
+  const res = await env.send({ type: "saveSettings", settings: { clientId: "own-client-id", sites: [] } });
+  assert.deepEqual(res, { ok: true, signedOut: true });
+  assert.deepEqual(env.data.mappings[KEY], CONFIRMED);
+});
+
+test("a search that MyAnimeList rejects gets a plain message", async () => {
+  const env = await boot();
+  env.mal.failNext("GET", /\/v2\/anime$/, 400);
+  const res = await env.send({ type: "search", query: "x" });
+  assert.deepEqual(res, {
+    ok: false,
+    error: "MyAnimeList didn't accept that search. Try a longer or different name.",
+  });
+});
+
+test("other search errors keep their text", async () => {
+  const env = await boot();
+  env.mal.failNext("GET", /\/v2\/anime$/, 500);
+  const res = await env.send({ type: "search", query: "x" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /API error 500/);
+});

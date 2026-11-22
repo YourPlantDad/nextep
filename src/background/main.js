@@ -16,7 +16,7 @@ import {
 import { badgeText } from "../lib/badge.js";
 import { LIST_STATUSES } from "../lib/progress.js";
 import { learnRule } from "../lib/learn.js";
-import { toHttpUrl, siteHost, normalizeHost } from "../lib/template.js";
+import { toHttpUrl, siteHost, normalizeHost, cleanHost } from "../lib/template.js";
 
 const store = createStore();
 const auth = createAuth({ store });
@@ -43,7 +43,12 @@ async function showRecorded(event) {
     completed: event.completed,
     at: Date.now(),
   });
-  await browser.browserAction.openPopup({ windowId: context.windowId });
+  try {
+    await browser.browserAction.openPopup({ windowId: context.windowId });
+  } catch {
+    // Nothing opened, so a popup opened by hand later must not show this as news.
+    await store.takeJustRecorded();
+  }
 }
 
 // Only a recorded step shows anything. The other events are already visible as the badge.
@@ -99,6 +104,12 @@ browser.tabs.onUpdated.addListener(
   },
   { properties: ["url", "title", "status"] },
 );
+
+// Every open tab, for changes that affect all of them (sign-in and settings).
+async function refreshAllBadges() {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.filter((t) => t.url).map((t) => updateBadge(t.id, t).catch(() => {})));
+}
 
 const MATCH_FIELDS = "media_type,num_episodes,start_season";
 
@@ -176,6 +187,11 @@ const handlers = {
     return {};
   },
 
+  async adjustWatched({ key, delta }) {
+    if (delta !== 1 && delta !== -1) throw new Error("The change must be 1 or -1.");
+    return { result: await tracker.adjustWatched(key, delta) };
+  },
+
   async resume({ key, episode }) {
     if (episode != null && !Number.isInteger(episode)) {
       throw new Error("Episode must be a whole number.");
@@ -184,7 +200,15 @@ const handlers = {
   },
 
   async search({ query }) {
-    const nodes = await api.search(query, { limit: 10, fields: MATCH_FIELDS });
+    let nodes;
+    try {
+      nodes = await api.search(query, { limit: 10, fields: MATCH_FIELDS });
+    } catch (e) {
+      if (e.status === 400) {
+        throw new Error("MyAnimeList didn't accept that search. Try a longer or different name.");
+      }
+      throw e;
+    }
     return {
       results: nodes.map((n) => ({
         id: n.id,
@@ -264,6 +288,7 @@ const handlers = {
 
   async signOut() {
     await auth.signOut();
+    await tracker.clearListState();
     return {};
   },
 
@@ -285,7 +310,7 @@ const handlers = {
 
   async saveSettings({ settings }) {
     const sites = (settings.sites ?? []).map((r) => {
-      const host = String(r.host ?? "").trim().toLowerCase();
+      const host = cleanHost(r.host);
       if (r.url === undefined) return { host, pattern: String(r.pattern ?? "").trim() };
       const rule = {
         host,
@@ -313,6 +338,7 @@ const handlers = {
       (await store.isSignedIn())
     ) {
       await auth.signOut();
+      await tracker.clearListState();
       signedOut = true;
     }
     return { signedOut };
@@ -323,14 +349,20 @@ const handlers = {
   },
 };
 
-const mutating = new Set(["selectMapping", "setWatched", "setStatus", "removeFromList", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+const mutating = new Set(["selectMapping", "setWatched", "adjustWatched", "setStatus", "removeFromList", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+
+// These change what every tab's badge shows, not just the active one.
+const allTabs = new Set(["signIn", "signOut", "saveSettings"]);
 
 browser.runtime.onMessage.addListener(async (message) => {
   try {
     const handler = handlers[message?.type];
     if (!handler) throw new Error(`Unknown message type: ${message?.type}`);
     const data = await handler(message);
-    if (mutating.has(message.type)) await refreshActiveBadge().catch(() => {});
+    if (allTabs.has(message.type)) await refreshAllBadges().catch(() => {});
+    else if (mutating.has(message.type) || message.type === "getState") {
+      await refreshActiveBadge().catch(() => {});
+    }
     return { ok: true, ...data };
   } catch (e) {
     return { ok: false, error: e?.message ?? String(e) };
