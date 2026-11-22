@@ -1,5 +1,5 @@
 import { candidateQueries, exactMatches, truncateQuery, usableTitleName } from "./title-match.js";
-import { computeUpdate } from "./progress.js";
+import { computeUpdate, isPaused, LIST_STATUSES } from "./progress.js";
 import { pickEpisode } from "./url-parser.js";
 
 const SEARCH_FIELDS = "alternative_titles,num_episodes,media_type,start_season";
@@ -70,17 +70,41 @@ export function createTracker({ store, api, notify, now = Date.now }) {
     await notify("Not sure which anime this is. Open the popup to confirm.");
   }
 
-  async function applyProgressNow(malId, n, { force = false, silent = false } = {}) {
+  // Keeps the last list status read from MAL on the mapping, for the badge, and keeps
+  // `paused` in step with it. pausedAtLeast raises the episode waiting to be recorded.
+  async function recordList(key, status, watched, { pausedAtLeast = 0 } = {}) {
+    if (!key) return;
+    const mapping = await store.getMapping(key);
+    if (!mapping) return;
+    const next = { ...mapping, listStatus: status ? { status, watched } : null };
+    if (isPaused(status)) {
+      next.paused = status;
+      const episode = Math.max(mapping.pausedEpisode ?? 0, pausedAtLeast);
+      if (episode > 0) next.pausedEpisode = episode;
+    } else {
+      delete next.paused;
+      delete next.pausedEpisode;
+    }
+    await store.setMapping(key, next);
+  }
+
+  async function applyProgressNow(malId, n, { force = false, silent = false, key } = {}) {
     const node = await api.details(malId, "num_episodes,my_list_status");
     const numEpisodes = node.num_episodes ?? 0;
     const title = node.title ?? `Anime ${malId}`;
+    const current = node.my_list_status;
     const plan = computeUpdate({
-      listStatus: node.my_list_status,
+      listStatus: current,
       numEpisodes,
       watched: n,
       force,
     });
     if (plan.skip) {
+      // An episode above the total can't be recorded later, so a paused show doesn't keep it.
+      const fits = !(numEpisodes > 0 && n > numEpisodes);
+      await recordList(key, current?.status, current?.num_episodes_watched ?? 0, {
+        pausedAtLeast: plan.skip === "paused" && fits ? n : 0,
+      });
       if (plan.skip === "exceeds-total" && !silent) {
         await notify(
           `${title}: episode ${n} is higher than MyAnimeList's ${numEpisodes} episodes, so it wasn't updated (the site may number episodes differently)`,
@@ -89,9 +113,46 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       return { updated: false, skip: plan.skip, numEpisodes };
     }
     const listStatus = await api.updateStatus(malId, plan.body);
+    await recordList(key, plan.body.status ?? current?.status, plan.body.num_watched_episodes);
     const completed = plan.body.status === "completed" ? ", completed" : "";
     if (!silent) await notify(`${title}: watched ${n}/${numEpisodes || "?"}${completed}`);
     return { updated: true, numEpisodes, listStatus };
+  }
+
+  async function resumeNow(key, episode) {
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const current = node.my_list_status?.num_episodes_watched ?? 0;
+    let count = Math.max(current, mapping.pausedEpisode ?? 0, episode ?? 0);
+    if (total > 0) count = Math.min(count, total);
+    // Reaching the total completes the show, same as everywhere else.
+    const status = total > 0 && count === total ? "completed" : "watching";
+    const listStatus = await api.updateStatus(mapping.malId, {
+      status,
+      num_watched_episodes: count,
+    });
+    await recordList(key, status, count);
+    return { updated: true, numEpisodes: total, listStatus };
+  }
+
+  async function setStatusNow(key, status) {
+    if (!LIST_STATUSES.includes(status)) throw new Error("That isn't a list status.");
+    const mapping = await store.getMapping(key);
+    if (!mapping?.malId) throw new Error("No anime selected for this show.");
+    const node = await api.details(mapping.malId, "num_episodes,my_list_status");
+    const total = node.num_episodes ?? 0;
+    const body = { status };
+    if (status === "completed" && total > 0) body.num_watched_episodes = total;
+    const listStatus = await api.updateStatus(mapping.malId, body);
+    const watched = body.num_watched_episodes ?? node.my_list_status?.num_episodes_watched ?? 0;
+    await recordList(key, status, watched);
+    return { updated: true, numEpisodes: total, listStatus };
+  }
+
+  async function noteListStatusNow(key, listStatus) {
+    await recordList(key, listStatus?.status, listStatus?.num_episodes_watched ?? 0);
   }
 
   async function markWatched(key, n) {
@@ -107,7 +168,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       }
       return { pending: true };
     }
-    return applyProgressNow(mapping.malId, n);
+    return applyProgressNow(mapping.malId, n, { key });
   }
 
   // trigger says what changed: "url" is a bare address change, "title" is a loaded or
@@ -164,7 +225,7 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       confirmed: true,
       candidates: [],
     });
-    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode);
+    if (existing?.pendingEpisode) return applyProgressNow(node.id, existing.pendingEpisode, { key });
     return null;
   }
 
@@ -183,5 +244,8 @@ export function createTracker({ store, api, notify, now = Date.now }) {
       enqueue(() => ensureMappingNow(key, slug, titleName)),
     applyProgress: (malId, n, options) => enqueue(() => applyProgressNow(malId, n, options)),
     selectMapping: (key, malId) => enqueue(() => selectMappingNow(key, malId)),
+    resume: (key, episode) => enqueue(() => resumeNow(key, episode)),
+    setStatus: (key, status) => enqueue(() => setStatusNow(key, status)),
+    noteListStatus: (key, listStatus) => enqueue(() => noteListStatusNow(key, listStatus)),
   };
 }

@@ -277,7 +277,8 @@ test("a queued selectMapping waits for an in-flight handleVisit and nothing dead
   const selected = tracker.selectMapping("example.tv|foo-bar", 2);
   await Promise.all([inFlight, selected]);
   // Visit stores pendingEpisode (unconfirmed) first; only then does select confirm.
-  assert.deepEqual(writes, [false, true]);
+  // The last write caches the list status after the pending episode is applied.
+  assert.deepEqual(writes, [false, true, true]);
   assert.deepEqual(patches, [{ id: 2, body: { num_watched_episodes: 4, status: "watching" } }]);
   assert.equal((await store.getMapping("example.tv|foo-bar")).confirmed, true);
 });
@@ -509,4 +510,137 @@ test("suggestions come from the last auto candidate with results, not the shorte
   const m = await store.getMapping("example.tv|foo-bar-99");
   assert.equal(m.confirmed, false);
   assert.deepEqual(m.candidates.map((c) => c.id), [2]);
+});
+
+const JJK_KEY = `example.tv|${JJK}`;
+
+test("automatic step on an on-hold anime writes nothing and remembers the episode", async () => {
+  const { tracker, store, patches, notes } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  await tracker.handleVisit(visit(JJK, 4));
+  await tracker.handleVisit(visit(JJK, 5));
+  assert.deepEqual(patches, []);
+  assert.deepEqual(notes, ['Tracking "Jujutsu Kaisen 2nd Season"']);
+  let m = await store.getMapping(JJK_KEY);
+  assert.equal(m.paused, "on_hold");
+  assert.equal(m.pausedEpisode, 4);
+  assert.deepEqual(m.listStatus, { status: "on_hold", watched: 3 });
+
+  await tracker.handleVisit(visit(JJK, 6));
+  assert.deepEqual(patches, []);
+  m = await store.getMapping(JJK_KEY);
+  assert.equal(m.pausedEpisode, 5);
+});
+
+test("dropped is stored as paused too", async () => {
+  const { tracker, store, patches } = jjkEnv({ status: "dropped", num_episodes_watched: 1 });
+  await tracker.handleVisit(visit(JJK, 2));
+  await tracker.handleVisit(visit(JJK, 3));
+  assert.deepEqual(patches, []);
+  assert.equal((await store.getMapping(JJK_KEY)).paused, "dropped");
+});
+
+test("resume sets watching with the highest known count and clears the flags", async () => {
+  const { tracker, store, patches, notes } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  await tracker.handleVisit(visit(JJK, 4));
+  await tracker.handleVisit(visit(JJK, 5));
+  await tracker.handleVisit(visit(JJK, 6));
+  notes.length = 0;
+  await tracker.resume(JJK_KEY, null);
+  assert.deepEqual(patches, [{ id: 51009, body: { status: "watching", num_watched_episodes: 5 } }]);
+  const m = await store.getMapping(JJK_KEY);
+  assert.equal(m.paused, undefined);
+  assert.equal(m.pausedEpisode, undefined);
+  assert.deepEqual(m.listStatus, { status: "watching", watched: 5 });
+  assert.deepEqual(notes, []);
+
+  await tracker.resume(JJK_KEY, 9);
+  assert.deepEqual(patches[1].body, { status: "watching", num_watched_episodes: 9 });
+});
+
+test("resume keeps a higher count already on the list", async () => {
+  const { tracker, patches } = jjkEnv({ status: "dropped", num_episodes_watched: 8 });
+  await tracker.handleVisit(visit(JJK, 1));
+  await tracker.handleVisit(visit(JJK, 2));
+  await tracker.resume(JJK_KEY, 3);
+  assert.deepEqual(patches[0].body, { status: "watching", num_watched_episodes: 8 });
+});
+
+test("resume never goes above a known total", async () => {
+  const { tracker, store, patches } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  await tracker.handleVisit(visit(JJK, 1));
+  await store.setMapping(JJK_KEY, { ...(await store.getMapping(JJK_KEY)), pausedEpisode: 99 });
+  await tracker.resume(JJK_KEY, 50);
+  assert.equal(patches[0].body.num_watched_episodes, 23);
+});
+
+test("an episode above the total is not remembered as paused progress", async () => {
+  const { tracker, store, patches } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  await tracker.handleVisit(visit(JJK, 30));
+  await tracker.handleVisit(visit(JJK, 31));
+  assert.deepEqual(patches, []);
+  const m = await store.getMapping(JJK_KEY);
+  assert.equal(m.paused, "on_hold");
+  assert.equal(m.pausedEpisode, undefined);
+});
+
+test("forced count change on an on-hold anime leaves the status alone", async () => {
+  const { tracker, store, patches } = jjkEnv({ status: "on_hold", num_episodes_watched: 3 });
+  await tracker.handleVisit(visit(JJK, 1));
+  await tracker.applyProgress(51009, 4, { force: true, silent: true, key: JJK_KEY });
+  assert.deepEqual(patches, [{ id: 51009, body: { num_watched_episodes: 4 } }]);
+  assert.equal((await store.getMapping(JJK_KEY)).paused, "on_hold");
+});
+
+test("noteListStatus keeps paused in step and clears it once the status changes", async () => {
+  const { tracker, store } = jjkEnv();
+  await tracker.handleVisit(visit(JJK, 1));
+  await tracker.noteListStatus(JJK_KEY, { status: "dropped", num_episodes_watched: 2 });
+  let m = await store.getMapping(JJK_KEY);
+  assert.equal(m.paused, "dropped");
+  assert.deepEqual(m.listStatus, { status: "dropped", watched: 2 });
+  await store.setMapping(JJK_KEY, { ...m, pausedEpisode: 5 });
+  await tracker.noteListStatus(JJK_KEY, { status: "watching", num_episodes_watched: 2 });
+  m = await store.getMapping(JJK_KEY);
+  assert.equal(m.paused, undefined);
+  assert.equal(m.pausedEpisode, undefined);
+  await tracker.noteListStatus(JJK_KEY, undefined);
+  assert.equal((await store.getMapping(JJK_KEY)).listStatus, null);
+});
+
+test("setStatus completed with a known total sends status and count", async () => {
+  const { tracker, store, patches, notes } = jjkEnv({ status: "watching", num_episodes_watched: 5 });
+  await tracker.handleVisit(visit(JJK, 1));
+  notes.length = 0;
+  await tracker.setStatus(JJK_KEY, "completed");
+  assert.deepEqual(patches, [{ id: 51009, body: { status: "completed", num_watched_episodes: 23 } }]);
+  assert.deepEqual(notes, []);
+  assert.deepEqual((await store.getMapping(JJK_KEY)).listStatus, { status: "completed", watched: 23 });
+});
+
+test("setStatus completed with an unknown total sends only the status", async () => {
+  const { tracker, patches } = setup({
+    searchResults: { "foo bar": [{ id: 7, title: "Foo Bar", num_episodes: 0 }] },
+    anime: {
+      7: {
+        title: "Foo Bar",
+        num_episodes: 0,
+        my_list_status: { status: "watching", num_episodes_watched: 5 },
+      },
+    },
+  });
+  await tracker.handleVisit(visit("foo-bar", 1));
+  await tracker.setStatus("example.tv|foo-bar", "completed");
+  assert.deepEqual(patches, [{ id: 7, body: { status: "completed" } }]);
+});
+
+test("setStatus to other statuses sends only the status and tracks paused", async () => {
+  const { tracker, store, patches } = jjkEnv({ status: "watching", num_episodes_watched: 5 });
+  await tracker.handleVisit(visit(JJK, 1));
+  await tracker.setStatus(JJK_KEY, "on_hold");
+  assert.deepEqual(patches[0].body, { status: "on_hold" });
+  assert.equal((await store.getMapping(JJK_KEY)).paused, "on_hold");
+  await tracker.setStatus(JJK_KEY, "plan_to_watch");
+  assert.deepEqual(patches[1].body, { status: "plan_to_watch" });
+  assert.equal((await store.getMapping(JJK_KEY)).paused, undefined);
+  await assert.rejects(tracker.setStatus(JJK_KEY, "nope"), /status/);
 });
