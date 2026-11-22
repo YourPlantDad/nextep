@@ -1,8 +1,6 @@
 import { DEFAULT_RULES } from "./url-parser.js";
 
 export const DEFAULT_SETTINGS = {
-  clientId: "",
-  clientSecret: "",
   openOnRecord: true,
   sites: DEFAULT_RULES,
 };
@@ -26,7 +24,12 @@ export function createStore(area) {
 
   return {
     async getSettings() {
-      return { ...DEFAULT_SETTINGS, ...(await read("settings")) };
+      // Only known settings come back, so an old stored Client ID or secret is never written back.
+      const stored = await read("settings");
+      return {
+        openOnRecord: stored?.openOnRecord ?? DEFAULT_SETTINGS.openOnRecord,
+        sites: stored?.sites ?? DEFAULT_SETTINGS.sites,
+      };
     },
     saveSettings: (settings) => storage().set({ settings }),
     async getAuth() {

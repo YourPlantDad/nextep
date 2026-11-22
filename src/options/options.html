@@ -41,8 +41,6 @@
           For example, <code>/watch/{show}/ep-{episode}</code> matches
           <code>/watch/some-show-12/ep-4</code>.
           An address can end in query parameters, like /anime/watch?id={show}&amp;ep={episode}. They can come in any order and extra ones are ignored. The tab title template is optional. It gives the show name and is used as a cross-check.
-          Old rules keep a regular expression pattern with the named groups
-          <code>(?&lt;slug&gt;...)</code> and <code>(?&lt;ep&gt;...)</code>.
         </p>
         <div id="sites"></div>
         <button id="addSite" type="button">Add website</button>
@@ -53,33 +51,6 @@
         <span id="message" role="status"></span>
       </div>
       <p id="error" role="alert" hidden></p>
-
-      <details id="ownClient">
-        <summary id="ownClientTitle">For developers: use your own MyAnimeList API client</summary>
-        <p id="noBuiltIn" class="muted" hidden>This build has no built-in Client ID, so you need your own.</p>
-        <p>
-          This is for people who build NextEp themselves or run their own version of it. If you
-          installed NextEp normally, you don't need it.
-        </p>
-        <ol>
-          <li>
-            Go to <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">https://myanimelist.net/apiconfig</a>
-            and create an ID. Set App Type to "other" and set "App Redirect URL" to the value below.
-          </li>
-          <li>Paste the Client ID below and save.</li>
-          <li>Sign in.</li>
-        </ol>
-        <label for="redirect">App Redirect URL</label>
-        <div class="row">
-          <input id="redirect" type="text" readonly>
-          <button id="copy" type="button">Copy</button>
-        </div>
-        <label for="clientId">Client ID (leave empty to use the built-in one)</label>
-        <input id="clientId" type="text" autocomplete="off" spellcheck="false">
-        <label for="clientSecret">Client Secret (optional)</label>
-        <input id="clientSecret" type="password" autocomplete="off">
-        <p class="muted">Only needed if MyAnimeList gave you one for your app type. It's only sent together with your own Client ID.</p>
-      </details>
 
       <footer class="muted">
         <p><a id="report" target="_blank" rel="noopener">Report a problem</a></p>

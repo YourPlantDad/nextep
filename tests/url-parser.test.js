@@ -6,13 +6,13 @@ import {
   visitTrigger,
   pickEpisode,
   hostHasRule,
-  detectGeneric,
+  isTemplateRule,
   validateRules,
   findRuleProblem,
   DEFAULT_RULES,
 } from "../src/lib/url-parser.js";
 
-const RULES = [{ host: "example.tv", pattern: "^/watch/(?<slug>[^/]+)/ep-(?<ep>\\d+)" }];
+const RULES = [{ host: "example.tv", url: "/watch/{show}/ep-{episode}", episodeFrom: "url" }];
 const BASE = "https://example.tv/watch/jujutsu-kaisen-2nd-season-78067";
 
 test("example.tv episodes: same key, different episode", () => {
@@ -49,8 +49,12 @@ test("invalid URL, non-http scheme, ep 0 return null", () => {
   assert.equal(parseUrl("https://example.tv/watch/x-1/ep-0", RULES), null);
 });
 
-test("invalid regex in a rule returns null without throwing", () => {
-  assert.equal(parseUrl("https://a.tv/x/ep-1", [{ host: "a.tv", pattern: "(" }]), null);
+test("a rule from an older version, without an address template, never matches", () => {
+  const old = [{ host: "a.tv", pattern: "/(?<slug>[^/]+)/ep-(?<ep>[0-9]+)" }];
+  assert.equal(parseUrl("https://a.tv/x/ep-1", old), null);
+  assert.equal(isTemplateRule(old[0]), false);
+  assert.equal(isTemplateRule(RULES[0]), true);
+  assert.equal(isTemplateRule(null), false);
 });
 
 test("slug is URI-decoded and lowercased", () => {
@@ -58,25 +62,17 @@ test("slug is URI-decoded and lowercased", () => {
   assert.equal(r.slug, "café-9");
 });
 
-test("pattern is matched against the query string", () => {
-  const rules = [{ host: "s.tv", pattern: "^/player\\?show=(?<slug>[^&]+)&ep=(?<ep>\\d+)" }];
+test("a template can read the show and the episode from the query string", () => {
+  const rules = [{ host: "s.tv", url: "/player?show={show}&ep={episode}", episodeFrom: "url" }];
   const r = parseUrl("https://s.tv/player?show=Bleach&ep=12", rules);
   assert.equal(r.slug, "bleach");
   assert.equal(r.episode, 12);
 });
 
-test("detectGeneric works on any host and strips www", () => {
-  const r = detectGeneric("https://www.other.tv/anime/some-show-12/episode-7");
-  assert.deepEqual(r, { host: "other.tv", slug: "some-show-12", episode: 7 });
-  assert.equal(detectGeneric("https://other.tv/about"), null);
-  assert.equal(detectGeneric("javascript:alert(1)"), null);
-});
-
 test("validateRules", () => {
   assert.equal(validateRules(RULES), null);
-  assert.match(validateRules([{ host: "a.tv", pattern: "(" }]), /invalid pattern/);
-  assert.match(validateRules([{ host: "a.tv", pattern: "(?<slug>x)" }]), /groups/);
-  assert.match(validateRules([{ host: "", pattern: "x" }]), /website/);
+  assert.match(validateRules([{ host: "", url: "/{show}/{episode}", episodeFrom: "url" }]), /website/);
+  assert.notEqual(validateRules([{ host: "a.tv", pattern: "(?<slug>x)(?<ep>1)" }]), null);
 });
 
 const TEMPLATE_URL = {
@@ -127,7 +123,7 @@ test("parseTab with no episode source", () => {
   assert.equal(r.slug, "some-show-9");
 });
 
-test("parseTab accepts old and new rules together and never throws", () => {
+test("parseTab accepts several rules and never throws", () => {
   const rules = [RULES[0], TEMPLATE_TITLE, { host: "example.tv", url: "/{nope}", episodeFrom: "url" }, null];
   assert.equal(parseTab({ url: "https://example.tv/watch/a-1/ep-2" }, rules).source, "url");
   assert.equal(parseTab({ url: "https://example.tv/watch/a-1?ep=9", title: "A Episode 2" }, rules).episode, 2);
@@ -228,7 +224,7 @@ test("no rules are enabled by default", () => {
 });
 
 test("validateRules rejects a website that is not a hostname", () => {
-  const rule = (host) => ({ host, pattern: "(?<slug>a)(?<ep>1)" });
+  const rule = (host) => ({ host, url: "/{show}/{episode}", episodeFrom: "url" });
   assert.equal(validateRules([rule("example.tv"), rule("localhost")]), null);
   for (const host of ["https://example.tv", "example", "not a host", "example.tv/watch"]) {
     assert.equal(validateRules([rule(host)]), `${host}: the website should look like example.tv.`);
@@ -236,26 +232,21 @@ test("validateRules rejects a website that is not a hostname", () => {
 });
 
 test("findRuleProblem reports the index of a bad rule in the middle of a list", () => {
-  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
-  const bad = { host: "b.tv", pattern: "(" };
+  const good = { host: "example.tv", url: "/{show}/{episode}", episodeFrom: "url" };
+  const bad = { host: "b.tv", url: "/{show}/{bogus}", episodeFrom: "url" };
   assert.equal(findRuleProblem([good, good]), null);
   const found = findRuleProblem([good, bad, good]);
   assert.equal(found.index, 1);
-  assert.match(found.message, /invalid pattern/);
+  assert.match(found.message, /bogus/);
   assert.equal(validateRules([good, bad, good]), found.message);
 });
 
 test("findRuleProblem reports an empty website with its index", () => {
-  const good = { host: "example.tv", pattern: "(?<slug>a)(?<ep>1)" };
+  const good = { host: "example.tv", url: "/{show}/{episode}", episodeFrom: "url" };
   const found = findRuleProblem([good, { host: "  ", url: "", episodeFrom: "url" }]);
   assert.deepEqual(found, {
     index: 1,
     message: "Fill in the website for this entry, or remove it.",
     field: "host",
   });
-});
-
-test("detectGeneric ignores a host that can never match", () => {
-  assert.equal(detectGeneric("http://myserver/anime/some-show/ep-2"), null);
-  assert.equal(detectGeneric("http://localhost/anime/some-show/ep-2").host, "localhost");
 });

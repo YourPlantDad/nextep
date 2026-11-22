@@ -6,5 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/*.test.js\""
+  },
+  "webExt": {
+    "ignoreFiles": ["tests", "package.json", "README.md", "DEVELOPING.md", "PRIVACY.md", "SECURITY.md"]
   }
 }

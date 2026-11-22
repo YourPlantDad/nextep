@@ -1,4 +1,4 @@
-import { BUILT_IN_CLIENT_ID, resolveClient } from "./config.js";
+import { BUILT_IN_CLIENT_ID } from "./config.js";
 
 export const AUTHORIZE_URL = "https://myanimelist.net/v1/oauth2/authorize";
 export const TOKEN_URL = "https://myanimelist.net/v1/oauth2/token";
@@ -48,13 +48,11 @@ export function parseRedirect(responseUrl, expectedState) {
   return code;
 }
 
-async function tokenRequest(fetch, fields, clientSecret) {
-  const body = new URLSearchParams(fields);
-  if (clientSecret) body.set("client_secret", clientSecret);
+async function tokenRequest(fetch, fields) {
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
+    body: new URLSearchParams(fields).toString(),
   });
   if (!res.ok) {
     throw Object.assign(new Error(`Token request failed (HTTP ${res.status}).`), {
@@ -95,19 +93,14 @@ export function createAuth({
   let inflight = null;
 
   async function doRefresh() {
-    const [settings, auth] = await Promise.all([store.getSettings(), store.getAuth()]);
-    const { clientId, clientSecret } = resolveClient(settings, builtInClientId);
+    const auth = await store.getAuth();
     if (!auth?.refreshToken) throw new AuthError("Not signed in.");
     try {
-      const json = await tokenRequest(
-        fetch,
-        {
-          client_id: clientId,
-          grant_type: "refresh_token",
-          refresh_token: auth.refreshToken,
-        },
-        clientSecret,
-      );
+      const json = await tokenRequest(fetch, {
+        client_id: builtInClientId,
+        grant_type: "refresh_token",
+        refresh_token: auth.refreshToken,
+      });
       const next = toAuth(json, now);
       if (auth.name) next.name = auth.name;
       await store.setAuth(next);
@@ -143,27 +136,24 @@ export function createAuth({
   }
 
   async function signIn() {
-    const { clientId, clientSecret } = resolveClient(await store.getSettings(), builtInClientId);
-    if (!clientId) throw new Error("No Client ID. Set up your own API client at the bottom of the settings.");
+    if (!builtInClientId) {
+      throw new Error("This build has no MyAnimeList Client ID. See DEVELOPING.md.");
+    }
     const redirectUri = getIdentity().getRedirectURL();
     const verifier = randomString(64);
     const state = randomString(32);
     const responseUrl = await getIdentity().launchWebAuthFlow({
-      url: buildAuthorizeUrl({ clientId, redirectUri, state, verifier }),
+      url: buildAuthorizeUrl({ clientId: builtInClientId, redirectUri, state, verifier }),
       interactive: true,
     });
     const code = parseRedirect(responseUrl, state);
-    const json = await tokenRequest(
-      fetch,
-      {
-        client_id: clientId,
-        grant_type: "authorization_code",
-        code,
-        code_verifier: verifier,
-        redirect_uri: redirectUri,
-      },
-      clientSecret,
-    );
+    const json = await tokenRequest(fetch, {
+      client_id: builtInClientId,
+      grant_type: "authorization_code",
+      code,
+      code_verifier: verifier,
+      redirect_uri: redirectUri,
+    });
     const record = toAuth(json, now);
     const name = await fetchUserName(fetch, record.accessToken);
     if (name) record.name = name;

@@ -2,17 +2,16 @@ import { createStore } from "../lib/store.js";
 import { createAuth } from "../lib/oauth.js";
 import { createApi } from "../lib/mal-api.js";
 import { createTracker } from "../lib/tracker.js";
-import { BUILT_IN_CLIENT_ID, resolveClient } from "../lib/config.js";
 import {
   parseUrl,
   parseTab,
   pickEpisode,
   visitTrigger,
   hostHasRule,
-  detectGeneric,
   findRuleProblem,
-  GENERIC_PATTERN,
+  isTemplateRule,
 } from "../lib/url-parser.js";
+import { detectEpisodePage } from "../lib/one-click.js";
 import { badgeText } from "../lib/badge.js";
 import { LIST_STATUSES } from "../lib/progress.js";
 import { learnRule } from "../lib/learn.js";
@@ -21,6 +20,16 @@ import { toHttpUrl, siteHost, normalizeHost, cleanHost } from "../lib/template.j
 const store = createStore();
 const auth = createAuth({ store });
 const api = createApi({ tokens: auth });
+
+// Rules from an older version have no address template. They are removed once, when this page
+// starts. Matches and last-seen entries stay, so enabling the site again picks them up.
+async function dropOldRules() {
+  const settings = await store.getSettings();
+  if (!Array.isArray(settings.sites)) return;
+  const sites = settings.sites.filter(isTemplateRule);
+  if (sites.length !== settings.sites.length) await store.saveSettings({ ...settings, sites });
+}
+dropOldRules().catch((e) => console.error("NextEp:", e));
 
 // Opens the popup for a moment after an automatic step, if that's on and it can work. A failure
 // is not fatal: older Firefox rejects the call, and so does a window that isn't focused or is
@@ -138,9 +147,8 @@ const handlers = {
     const signedIn = await store.isSignedIn();
     const state = {
       signedIn,
-      hasClientId: Boolean(resolveClient(settings).clientId),
       parsed,
-      generic: parsed || hasRule ? null : detectGeneric(url),
+      generic: parsed || hasRule ? null : detectEpisodePage(url),
       hostHasRule: hasRule,
       teach: page && sample?.host === siteHost(page) ? sample : null,
       mapping: null,
@@ -239,11 +247,11 @@ const handlers = {
   },
 
   async enableSite({ url }) {
-    const found = detectGeneric(url);
+    const found = detectEpisodePage(url);
     if (!found) throw new Error("This page doesn't look like an episode page.");
     const settings = await store.getSettings();
     if (!settings.sites.some((r) => r.host === found.host)) {
-      const sites = [...settings.sites, { host: found.host, pattern: GENERIC_PATTERN }];
+      const sites = [...settings.sites, found.rule];
       await store.saveSettings({ ...settings, sites });
       // Record this page so the next episode counts as a step from it.
       const parsed = parseUrl(url, sites);
@@ -316,16 +324,12 @@ const handlers = {
   },
 
   async getSettings() {
-    return {
-      settings: await store.getSettings(),
-      hasBuiltInClientId: Boolean(BUILT_IN_CLIENT_ID),
-    };
+    return { settings: await store.getSettings() };
   },
 
   async saveSettings({ settings }) {
     const sites = (settings.sites ?? []).map((r) => {
       const host = cleanHost(r.host);
-      if (r.url === undefined) return { host, pattern: String(r.pattern ?? "").trim() };
       const rule = {
         host,
         url: String(r.url ?? "").trim(),
@@ -339,29 +343,8 @@ const handlers = {
     if (problem) {
       return { ok: false, error: problem.message, index: problem.index, field: problem.field };
     }
-    const previous = await store.getSettings();
-    const next = {
-      clientId: String(settings.clientId ?? "").trim(),
-      clientSecret: String(settings.clientSecret ?? "").trim(),
-      openOnRecord: settings.openOnRecord !== false,
-      sites,
-    };
-    await store.saveSettings(next);
-    // Tokens belong to the client that issued them.
-    let signedOut = false;
-    if (
-      resolveClient(previous).clientId !== resolveClient(next).clientId &&
-      (await store.isSignedIn())
-    ) {
-      await auth.signOut();
-      await tracker.clearListState();
-      signedOut = true;
-    }
-    return { signedOut };
-  },
-
-  async getRedirectUrl() {
-    return { url: browser.identity.getRedirectURL() };
+    await store.saveSettings({ openOnRecord: settings.openOnRecord !== false, sites });
+    return {};
   },
 };
 

@@ -67,8 +67,7 @@ label.check {
   font-size: 13px;
 }
 
-input[type="text"],
-input[type="password"] {
+input[type="text"] {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -94,6 +93,7 @@ details.site {
 }
 
 details.site > summary {
+  cursor: pointer;
   font-weight: 600;
 }
 
@@ -151,17 +151,6 @@ button:disabled {
 
 #error {
   color: var(--error);
-}
-
-details {
-  border-top: 1px solid var(--border);
-  margin: 16px 0;
-  padding-top: 12px;
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
 }
 
 footer {

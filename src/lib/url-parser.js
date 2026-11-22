@@ -1,35 +1,7 @@
-import {
-  compileTemplate,
-  matchTemplate,
-  validateTemplate,
-  toHttpUrl,
-  addressText,
-  siteHost,
-  isHostname,
-} from "./template.js";
+import { compileTemplate, matchTemplate, validateTemplate, toHttpUrl, addressText, isHostname } from "./template.js";
 
 export const DEFAULT_RULES = [];
 export const EPISODE_SOURCES = ["url", "title", "none"];
-
-export const GENERIC_PATTERN = "/(?<slug>[^/]+)/(?:ep|episode)-(?<ep>\\d+)";
-
-// The old kind of rule: a regex tested against the raw path plus query.
-function extractPattern(u, pattern) {
-  let m;
-  try {
-    m = new RegExp(pattern).exec(u.pathname + u.search);
-  } catch {
-    return null;
-  }
-  const rawSlug = m?.groups?.slug;
-  const episode = Number.parseInt(m?.groups?.ep, 10);
-  if (!rawSlug || !(episode > 0)) return null;
-  try {
-    return { slug: decodeURIComponent(rawSlug).toLowerCase(), episode };
-  } catch {
-    return null;
-  }
-}
 
 function hostMatches(hostname, host) {
   const h = hostname.toLowerCase();
@@ -38,6 +10,7 @@ function hostMatches(hostname, host) {
 }
 
 function extractTemplate(u, title, rule) {
+  if (typeof rule.url !== "string") return null;
   const found = matchTemplate(compileTemplate(rule.url, "url"), addressText(u));
   if (!found?.show) return null;
   const hasTitleTemplate = typeof rule.title === "string" && rule.title.trim() !== "";
@@ -59,22 +32,7 @@ function extractTemplate(u, title, rule) {
   };
 }
 
-function extractRule(u, title, rule) {
-  if (typeof rule.url === "string") return extractTemplate(u, title, rule);
-  const found = extractPattern(u, rule.pattern);
-  return (
-    found && {
-      ...found,
-      urlEpisode: found.episode,
-      titleEpisode: null,
-      titleName: null,
-      hasTitleTemplate: false,
-      source: "url",
-    }
-  );
-}
-
-// Never throws. Rules can be the old {host, pattern} or the newer {host, url, title?, episodeFrom}.
+// Never throws. A rule is {host, url, title?, episodeFrom}.
 // episode is the number from the rule's own source. Both numbers are kept so a caller can cross-check.
 export function parseTab(tab, rules) {
   try {
@@ -83,7 +41,7 @@ export function parseTab(tab, rules) {
     const title = typeof tab.title === "string" ? tab.title : "";
     for (const rule of rules ?? []) {
       if (typeof rule?.host !== "string" || !hostMatches(u.hostname, rule.host)) continue;
-      const found = extractRule(u, title, rule);
+      const found = extractTemplate(u, title, rule);
       if (found) return { host: rule.host, ...found, key: rule.host + "|" + found.slug };
     }
   } catch {
@@ -125,14 +83,8 @@ export function pickEpisode(parsed, total = 0) {
   return { episode: url, fromTitle: false };
 }
 
-export function detectGeneric(url) {
-  const u = toHttpUrl(url);
-  if (!u) return null;
-  const found = extractPattern(u, GENERIC_PATTERN);
-  if (!found) return null;
-  const host = siteHost(u);
-  return isHostname(host) ? { host, ...found } : null;
-}
+// Rules without an address template are left over from an older version. They are dropped.
+export const isTemplateRule = (rule) => typeof rule?.url === "string";
 
 function validateTemplateRule(rule, label) {
   if (!EPISODE_SOURCES.includes(rule.episodeFrom)) {
@@ -169,20 +121,8 @@ export function findRuleProblem(rules) {
     if (!isHostname(rule.host)) {
       return fail(`${label}: the website should look like example.tv.`, "host");
     }
-    if (rule.url !== undefined) {
-      const problem = validateTemplateRule(rule, label);
-      if (problem) return fail(problem);
-      continue;
-    }
-    if (typeof rule.pattern !== "string") return fail(`${label}: pattern is missing.`);
-    try {
-      new RegExp(rule.pattern);
-    } catch (e) {
-      return fail(`${label}: invalid pattern (${e.message}).`);
-    }
-    if (!rule.pattern.includes("(?<slug>") || !rule.pattern.includes("(?<ep>")) {
-      return fail(`${label}: pattern needs both (?<slug>...) and (?<ep>...) groups.`);
-    }
+    const problem = validateTemplateRule(rule, label);
+    if (problem) return fail(problem);
   }
   return null;
 }

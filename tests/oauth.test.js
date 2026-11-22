@@ -56,8 +56,8 @@ test("parseRedirect rejects state mismatch, error and missing code", () => {
   assert.throws(() => parseRedirect("https://r.test/?state=S", "S"), /code/);
 });
 
-async function signInWith(settings) {
-  const store = createStore(memoryArea({ settings }));
+async function signInWith(stored = {}) {
+  const store = createStore(memoryArea(stored));
   const requests = [];
   const fetch = async (url, init) => {
     requests.push({ url, init });
@@ -71,13 +71,13 @@ async function signInWith(settings) {
       return `https://ext.test/redirect?code=CODE&state=${authorizeUrl.searchParams.get("state")}`;
     },
   };
-  const auth = createAuth({ store, fetch, identity, now: () => 1000 });
+  const auth = createAuth({ store, fetch, identity, now: () => 1000, builtInClientId: "cid" });
   await auth.signIn();
   return { store, requests, authorizeUrl };
 }
 
-test("code exchange omits client_secret when not configured", async () => {
-  const { requests, store, authorizeUrl } = await signInWith({ clientId: "cid" });
+test("code exchange sends the Client ID and no secret", async () => {
+  const { requests, store, authorizeUrl } = await signInWith();
   // The token exchange, then the user name lookup.
   assert.equal(requests.length, 2);
   const body = new URLSearchParams(requests[0].init.body);
@@ -95,16 +95,12 @@ test("code exchange omits client_secret when not configured", async () => {
   });
 });
 
-test("code exchange includes client_secret when configured", async () => {
-  const { requests } = await signInWith({ clientId: "cid", clientSecret: "sek" });
-  assert.equal(new URLSearchParams(requests[0].init.body).get("client_secret"), "sek");
-});
-
 test("signIn rejects on state mismatch without exchanging", async () => {
-  const store = createStore(memoryArea({ settings: { clientId: "cid" } }));
+  const store = createStore(memoryArea());
   let called = false;
   const auth = createAuth({
     store,
+    builtInClientId: "cid",
     fetch: async () => {
       called = true;
     },
@@ -120,7 +116,6 @@ test("signIn rejects on state mismatch without exchanging", async () => {
 test("refresh is single-flight", async () => {
   const store = createStore(
     memoryArea({
-      settings: { clientId: "cid" },
       auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 1000 },
     }),
   );
@@ -140,7 +135,6 @@ test("refresh is single-flight", async () => {
 test("refresh failing with 400 clears auth and throws AuthError", async () => {
   const store = createStore(
     memoryArea({
-      settings: { clientId: "cid" },
       auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 1000 },
     }),
   );
@@ -161,29 +155,8 @@ test("token far from expiry is returned without refreshing", async () => {
   assert.equal(await auth.getAccessToken(), "A1");
 });
 
-import { resolveClient } from "../src/lib/config.js";
-
-test("resolveClient: override wins and carries its secret", () => {
-  assert.deepEqual(resolveClient({ clientId: " mine ", clientSecret: " s " }, "builtin"), {
-    clientId: "mine",
-    clientSecret: "s",
-  });
-  assert.deepEqual(resolveClient({ clientId: "mine", clientSecret: "" }, "builtin"), {
-    clientId: "mine",
-    clientSecret: undefined,
-  });
-});
-
-test("resolveClient: built-in ID never carries a secret", () => {
-  assert.deepEqual(resolveClient({ clientId: "  ", clientSecret: "leftover" }, "builtin"), {
-    clientId: "builtin",
-    clientSecret: undefined,
-  });
-  assert.deepEqual(resolveClient({}, ""), { clientId: "", clientSecret: undefined });
-});
-
-test("signIn uses the built-in ID and never sends a secret with it", async () => {
-  const store = createStore(memoryArea({ settings: { clientSecret: "leftover" } }));
+test("signIn uses the built-in ID and ignores an old stored Client ID and secret", async () => {
+  const store = createStore(memoryArea({ settings: { clientId: "old", clientSecret: "leftover" } }));
   const bodies = [];
   const auth = createAuth({
     store,
@@ -205,14 +178,30 @@ test("signIn uses the built-in ID and never sends a secret with it", async () =>
   assert.equal(bodies[0].has("client_secret"), false);
 });
 
-test("signIn without any client ID fails", async () => {
-  const auth = createAuth({ store: createStore(memoryArea()), builtInClientId: "" });
-  await assert.rejects(auth.signIn(), /Client ID/);
+test("signIn without a built-in Client ID fails before opening the sign-in page", async () => {
+  let opened = false;
+  const auth = createAuth({
+    store: createStore(memoryArea()),
+    builtInClientId: "",
+    identity: {
+      getRedirectURL: () => "https://ext.test/redirect",
+      launchWebAuthFlow: async () => {
+        opened = true;
+      },
+    },
+  });
+  await assert.rejects(auth.signIn(), {
+    message: "This build has no MyAnimeList Client ID. See DEVELOPING.md.",
+  });
+  assert.equal(opened, false);
 });
 
-test("refresh uses the effective client ID", async () => {
+test("refresh uses the built-in Client ID and sends no secret", async () => {
   const store = createStore(
-    memoryArea({ auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 1000 } }),
+    memoryArea({
+      settings: { clientId: "old", clientSecret: "leftover" },
+      auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 1000 },
+    }),
   );
   let body;
   const auth = createAuth({
@@ -231,7 +220,7 @@ test("refresh uses the effective client ID", async () => {
 
 // Routes the token endpoint and the user endpoint separately.
 function userEnv({ auth, userResponse }) {
-  const store = createStore(memoryArea({ settings: { clientId: "cid" }, ...(auth && { auth }) }));
+  const store = createStore(memoryArea({ ...(auth && { auth }) }));
   const calls = [];
   const fetch = async (url, init) => {
     calls.push({ url, init });

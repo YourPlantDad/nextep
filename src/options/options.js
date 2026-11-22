@@ -77,20 +77,9 @@ function templateRow(rule) {
   return row;
 }
 
-function patternRow(rule) {
-  const host = input("website, e.g. example.tv", rule.host);
-  const pattern = input("pattern with (?<slug>) and (?<ep>)", rule.pattern);
-  const row = document.createElement("div");
-  row.className = "fields";
-  row.append(field("Website", host), field("Regex pattern", pattern));
-  row.host = host;
-  row.collect = () => ({ host: host.value, pattern: pattern.value });
-  return row;
-}
-
 // One collapsible entry. The summary shows the website and follows the field as you type.
 function siteRow(rule, { open = false } = {}) {
-  const fields = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
+  const fields = templateRow(rule);
   const entry = document.createElement("details");
   entry.className = "site";
   entry.open = open;
@@ -128,8 +117,6 @@ function openForError(index, field) {
 
 function collect() {
   return {
-    clientId: $("clientId").value,
-    clientSecret: $("clientSecret").value,
     openOnRecord: $("openOnRecord").checked,
     sites: [...$("sites").children].map((row) => row.collect()),
   };
@@ -188,16 +175,8 @@ async function loadForm() {
     return false;
   }
   const { settings } = res;
-  $("clientId").value = settings.clientId;
-  $("clientSecret").value = settings.clientSecret;
   $("openOnRecord").checked = settings.openOnRecord !== false;
   $("sites").replaceChildren(...settings.sites.map((rule) => siteRow(rule)));
-  // Only open this up front if the build has no built-in ID.
-  $("ownClient").open = !res.hasBuiltInClientId;
-  if (!res.hasBuiltInClientId) {
-    $("ownClientTitle").textContent = "Set up your own MyAnimeList API client";
-  }
-  $("noBuiltIn").hidden = res.hasBuiltInClientId;
   baseline = JSON.stringify(settings);
   dirty = false;
   blockReason = "";
@@ -214,10 +193,7 @@ async function save() {
     if (res.ok) {
       // Shows the saved values, and makes them the baseline for changes made elsewhere.
       await loadForm();
-      $("message").textContent = res.signedOut
-        ? "Saved. You were signed out because the Client ID changed."
-        : "Saved.";
-      if (res.signedOut) await refreshStatus();
+      $("message").textContent = "Saved.";
     }
     return res;
   } finally {
@@ -250,8 +226,6 @@ $("addSite").addEventListener("click", () => {
   entry.querySelector("input").focus();
 });
 
-$("copy").addEventListener("click", () => navigator.clipboard.writeText($("redirect").value));
-
 $("auth").addEventListener("click", (e) =>
   run(e.target, async () => {
     if (signedIn) {
@@ -272,10 +246,4 @@ $("privacy").href = `${REPO_URL}/blob/main/PRIVACY.md`;
 $("report").href = `${REPO_URL}/issues/new/choose`;
 
 await loadForm();
-try {
-  const redirect = await send({ type: "getRedirectUrl" });
-  if (redirect.ok) $("redirect").value = redirect.url;
-} catch {
-  // The redirect address is only shown for copying.
-}
 await refreshStatus();

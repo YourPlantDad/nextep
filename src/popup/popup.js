@@ -388,13 +388,9 @@ function paint() {
     return;
   }
   let nodes;
-  if (!state.hasClientId || !state.signedIn) {
+  if (!state.signedIn) {
     nodes = [
-      el("p", {
-        textContent: state.hasClientId
-          ? "Sign in to MyAnimeList to start tracking."
-          : "This build has no built-in Client ID. Add your own in the settings, then sign in.",
-      }),
+      el("p", { textContent: "Sign in to MyAnimeList to start tracking." }),
       button("Open settings", () => {
         browser.runtime.openOptionsPage();
         window.close();
