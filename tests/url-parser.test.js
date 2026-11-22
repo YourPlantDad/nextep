@@ -225,3 +225,16 @@ test("no rules are enabled by default", () => {
   assert.deepEqual(DEFAULT_RULES, []);
   assert.equal(parseUrl(`${BASE}/ep-4`, DEFAULT_RULES), null);
 });
+
+test("validateRules rejects a website that is not a hostname", () => {
+  const rule = (host) => ({ host, pattern: "(?<slug>a)(?<ep>1)" });
+  assert.equal(validateRules([rule("example.tv"), rule("localhost")]), null);
+  for (const host of ["https://example.tv", "example", "not a host", "example.tv/watch"]) {
+    assert.equal(validateRules([rule(host)]), `${host}: the website should look like example.tv.`);
+  }
+});
+
+test("detectGeneric ignores a host that can never match", () => {
+  assert.equal(detectGeneric("http://myserver/anime/some-show/ep-2"), null);
+  assert.equal(detectGeneric("http://localhost/anime/some-show/ep-2").host, "localhost");
+});

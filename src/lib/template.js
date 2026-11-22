@@ -43,7 +43,27 @@ export function addressText(u) {
 }
 
 export const normalizeHost = (host) => String(host).toLowerCase().replace(/^www\./, "");
-export const siteHost = (u) => normalizeHost(u.hostname);
+
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//;
+
+// What a website field means. An address or anything with a path is cut down to its
+// hostname, then a leading www. goes. The result may still not be a hostname.
+export function cleanHost(text) {
+  let s = String(text ?? "").trim().toLowerCase();
+  if (HAS_SCHEME.test(s) || /[/?#]/.test(s)) {
+    try {
+      s = new URL(HAS_SCHEME.test(s) ? s : "http://" + s).hostname;
+    } catch {
+      return s;
+    }
+  }
+  return normalizeHost(s);
+}
+
+// Letters, digits, dots and hyphens with at least one dot, or localhost.
+export const isHostname = (s) => s === "localhost" || /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s);
+
+export const siteHost = (u) => cleanHost(u.hostname);
 
 const SEP = "[" + TITLE_SEPARATORS + "]+";
 

@@ -5,6 +5,7 @@ import {
   toHttpUrl,
   addressText,
   siteHost,
+  isHostname,
 } from "./template.js";
 
 export const DEFAULT_RULES = [];
@@ -129,7 +130,8 @@ export function detectGeneric(url) {
   if (!u) return null;
   const found = extractPattern(u, GENERIC_PATTERN);
   if (!found) return null;
-  return { host: siteHost(u), ...found };
+  const host = siteHost(u);
+  return isHostname(host) ? { host, ...found } : null;
 }
 
 function validateTemplateRule(rule, label) {
@@ -159,6 +161,7 @@ export function validateRules(rules) {
     if (typeof rule?.host !== "string" || !rule.host.trim()) {
       return "Every site rule needs a website.";
     }
+    if (!isHostname(rule.host)) return `${label}: the website should look like example.tv.`;
     if (rule.url !== undefined) {
       const problem = validateTemplateRule(rule, label);
       if (problem) return problem;

@@ -1,5 +1,5 @@
 // Learns a site rule from two pages: episode 1 and episode 2 of the same show.
-import { toHttpUrl, addressText, siteHost } from "./template.js";
+import { toHttpUrl, addressText, siteHost, isHostname } from "./template.js";
 
 const isAlnum = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 const LEADING_SEPARATORS = /^[\s\-\u2013\u2014:|·]+/;
@@ -152,6 +152,9 @@ export function learnRule(first, second) {
     return { ok: false, error: "This only works on pages whose address starts with http or https." };
   }
   const host = siteHost(ua);
+  if (!isHostname(host)) {
+    return { ok: false, error: "The website name of this page can't be matched. It should look like example.tv." };
+  }
   if (host !== siteHost(ub)) {
     return {
       ok: false,
