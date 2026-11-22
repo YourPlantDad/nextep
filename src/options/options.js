@@ -10,26 +10,70 @@ function showError(text) {
   $("error").hidden = !text;
 }
 
-function siteRow(rule) {
-  const host = Object.assign(document.createElement("input"), {
+function input(placeholder, value) {
+  return Object.assign(document.createElement("input"), {
     type: "text",
-    placeholder: "host, e.g. example.tv",
-    value: rule.host,
-  });
-  const pattern = Object.assign(document.createElement("input"), {
-    type: "text",
-    placeholder: "pattern with (?<slug>) and (?<ep>)",
-    value: rule.pattern,
+    placeholder,
+    value: value ?? "",
     spellcheck: false,
   });
-  const remove = Object.assign(document.createElement("button"), {
-    type: "button",
-    textContent: "Remove",
-    onclick: () => row.remove(),
-  });
+}
+
+function field(text, control) {
+  const label = document.createElement("label");
+  label.append(text, control);
+  return label;
+}
+
+const SOURCES = [
+  ["url", "address"],
+  ["title", "tab title"],
+  ["none", "nowhere (manual)"],
+];
+
+function templateRow(rule) {
+  const host = input("host, e.g. example.tv", rule.host);
+  const url = input("/watch/{show}/ep-{episode}", rule.url);
+  const title = input("{show} Episode {episode}{anything}", rule.title);
+  const from = document.createElement("select");
+  for (const [value, text] of SOURCES) from.append(new Option(text, value));
+  from.value = rule.episodeFrom ?? "url";
   const row = document.createElement("div");
   row.className = "site";
-  row.append(host, pattern, remove);
+  row.append(
+    field("Host", host),
+    field("Address template", url),
+    field("Tab title template (optional)", title),
+    field("Episode number from", from),
+  );
+  row.collect = () => ({
+    host: host.value,
+    url: url.value,
+    title: title.value,
+    episodeFrom: from.value,
+  });
+  return row;
+}
+
+function patternRow(rule) {
+  const host = input("host, e.g. example.tv", rule.host);
+  const pattern = input("pattern with (?<slug>) and (?<ep>)", rule.pattern);
+  const row = document.createElement("div");
+  row.className = "site";
+  row.append(field("Host", host), field("Regex pattern", pattern));
+  row.collect = () => ({ host: host.value, pattern: pattern.value });
+  return row;
+}
+
+function siteRow(rule) {
+  const row = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
+  row.append(
+    Object.assign(document.createElement("button"), {
+      type: "button",
+      textContent: "Remove",
+      onclick: () => row.remove(),
+    }),
+  );
   return row;
 }
 
@@ -38,10 +82,7 @@ function collect() {
     clientId: $("clientId").value,
     clientSecret: $("clientSecret").value,
     notifications: $("notifications").checked,
-    sites: [...$("sites").children].map((row) => ({
-      host: row.children[0].value,
-      pattern: row.children[1].value,
-    })),
+    sites: [...$("sites").children].map((row) => row.collect()),
   };
 }
 
@@ -86,7 +127,7 @@ async function save() {
 $("save").addEventListener("click", (e) => run(e.target, save));
 
 $("addSite").addEventListener("click", () => {
-  $("sites").append(siteRow({ host: "", pattern: "" }));
+  $("sites").append(siteRow({ host: "", url: "", title: "", episodeFrom: "url" }));
 });
 
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("redirect").value));
