@@ -75,7 +75,7 @@ test("validateRules", () => {
   assert.equal(validateRules(RULES), null);
   assert.match(validateRules([{ host: "a.tv", pattern: "(" }]), /invalid pattern/);
   assert.match(validateRules([{ host: "a.tv", pattern: "(?<slug>x)" }]), /groups/);
-  assert.match(validateRules([{ host: "", pattern: "x" }]), /host/);
+  assert.match(validateRules([{ host: "", pattern: "x" }]), /website/);
 });
 
 const TEMPLATE_URL = {

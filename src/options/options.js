@@ -33,20 +33,21 @@ const SOURCES = [
 ];
 
 function templateRow(rule) {
-  const host = input("host, e.g. example.tv", rule.host);
+  const host = input("website, e.g. example.tv", rule.host);
   const url = input("/watch/{show}/ep-{episode}", rule.url);
   const title = input("{show} Episode {episode}{anything}", rule.title);
   const from = document.createElement("select");
   for (const [value, text] of SOURCES) from.append(new Option(text, value));
   from.value = rule.episodeFrom ?? "url";
   const row = document.createElement("div");
-  row.className = "site";
+  row.className = "fields";
   row.append(
-    field("Host", host),
+    field("Website", host),
     field("Address template", url),
     field("Tab title template (optional)", title),
     field("Episode number from", from),
   );
+  row.host = host;
   row.collect = () => ({
     host: host.value,
     url: url.value,
@@ -57,32 +58,54 @@ function templateRow(rule) {
 }
 
 function patternRow(rule) {
-  const host = input("host, e.g. example.tv", rule.host);
+  const host = input("website, e.g. example.tv", rule.host);
   const pattern = input("pattern with (?<slug>) and (?<ep>)", rule.pattern);
   const row = document.createElement("div");
-  row.className = "site";
-  row.append(field("Host", host), field("Regex pattern", pattern));
+  row.className = "fields";
+  row.append(field("Website", host), field("Regex pattern", pattern));
+  row.host = host;
   row.collect = () => ({ host: host.value, pattern: pattern.value });
   return row;
 }
 
-function siteRow(rule) {
-  const row = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
-  row.append(
+// One collapsible entry. The summary shows the website and follows the field as you type.
+function siteRow(rule, { open = false } = {}) {
+  const fields = rule.url !== undefined ? templateRow(rule) : patternRow(rule);
+  const entry = document.createElement("details");
+  entry.className = "site";
+  entry.open = open;
+  const summary = document.createElement("summary");
+  const showName = () => {
+    summary.textContent = fields.host.value.trim() || "New website";
+  };
+  showName();
+  fields.host.addEventListener("input", showName);
+  fields.append(
     Object.assign(document.createElement("button"), {
       type: "button",
       textContent: "Remove",
-      onclick: () => row.remove(),
+      onclick: () => entry.remove(),
     }),
   );
-  return row;
+  entry.append(summary, fields);
+  entry.collect = fields.collect;
+  entry.websiteName = () => fields.host.value.trim().toLowerCase();
+  return entry;
+}
+
+// A validation message starts with the website's name. Open that entry, or all of them
+// if none matches.
+function openForError(text) {
+  const entries = [...$("sites").children];
+  const named = entries.filter((e) => e.websiteName() && text.startsWith(e.websiteName() + ":"));
+  for (const e of named.length > 0 ? named : entries) e.open = true;
 }
 
 function collect() {
   return {
     clientId: $("clientId").value,
     clientSecret: $("clientSecret").value,
-    notifications: $("notifications").checked,
+    openOnRecord: $("openOnRecord").checked,
     sites: [...$("sites").children].map((row) => row.collect()),
   };
 }
@@ -102,7 +125,10 @@ async function run(button, fn) {
   $("message").textContent = "";
   try {
     const res = await fn();
-    if (!res.ok) showError(res.error);
+    if (!res.ok) {
+      showError(res.error);
+      openForError(res.error ?? "");
+    }
     return res;
   } catch (e) {
     showError(e.message ?? String(e));
@@ -133,24 +159,9 @@ async function save() {
 $("save").addEventListener("click", (e) => run(e.target, save));
 
 $("addSite").addEventListener("click", () => {
-  $("sites").append(siteRow({ host: "", url: "", title: "", episodeFrom: "url" }));
-});
-
-$("testNote").addEventListener("click", async (e) => {
-  const button = e.target;
-  button.disabled = true;
-  $("noteResult").textContent = "";
-  try {
-    const res = await send({ type: "testNotification" });
-    $("noteResult").textContent =
-      res.ok && res.sent
-        ? "Sent. If nothing popped up, check Windows notification settings for Firefox."
-        : `Couldn't send it: ${res.error ?? "unknown error"}`;
-  } catch (err) {
-    $("noteResult").textContent = `Couldn't send it: ${err.message ?? String(err)}`;
-  } finally {
-    button.disabled = false;
-  }
+  const entry = siteRow({ host: "", url: "", title: "", episodeFrom: "url" }, { open: true });
+  $("sites").append(entry);
+  entry.querySelector("input").focus();
 });
 
 $("copy").addEventListener("click", () => navigator.clipboard.writeText($("redirect").value));
@@ -181,10 +192,13 @@ const [settings, redirect] = await Promise.all([
 if (settings.ok) {
   $("clientId").value = settings.settings.clientId;
   $("clientSecret").value = settings.settings.clientSecret;
-  $("notifications").checked = settings.settings.notifications !== false;
-  $("sites").replaceChildren(...settings.settings.sites.map(siteRow));
+  $("openOnRecord").checked = settings.settings.openOnRecord !== false;
+  $("sites").replaceChildren(...settings.settings.sites.map((rule) => siteRow(rule)));
   // Only open this up front if the build has no built-in ID.
-  $("advanced").open = !settings.hasBuiltInClientId;
+  $("ownClient").open = !settings.hasBuiltInClientId;
+  if (!settings.hasBuiltInClientId) {
+    $("ownClientTitle").textContent = "Set up your own MyAnimeList API client";
+  }
   $("noBuiltIn").hidden = settings.hasBuiltInClientId;
 } else showError(settings.error);
 if (redirect.ok) $("redirect").value = redirect.url;

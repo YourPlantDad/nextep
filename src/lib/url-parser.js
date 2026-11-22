@@ -140,7 +140,7 @@ function validateTemplateRule(rule, label) {
   if (urlProblem) return `${label}: address. ${urlProblem}`;
   const hasTitle = typeof rule.title === "string" && rule.title.trim() !== "";
   if (rule.episodeFrom === "title" && !hasTitle) {
-    return `${label}: I need a tab title template when the episode number comes from the tab title.`;
+    return `${label}: A tab title template is needed when the episode number comes from the tab title.`;
   }
   if (hasTitle) {
     const titleProblem = validateTemplate(rule.title, "title", {
@@ -155,9 +155,9 @@ function validateTemplateRule(rule, label) {
 export function validateRules(rules) {
   if (!Array.isArray(rules)) return "Site rules must be a list.";
   for (const rule of rules) {
-    const label = rule?.host || "(no host)";
+    const label = rule?.host || "(no website)";
     if (typeof rule?.host !== "string" || !rule.host.trim()) {
-      return "Every site rule needs a host.";
+      return "Every site rule needs a website.";
     }
     if (rule.url !== undefined) {
       const problem = validateTemplateRule(rule, label);

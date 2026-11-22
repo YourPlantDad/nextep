@@ -13,7 +13,7 @@
         <h2>Sign in to MyAnimeList</h2>
         <p>
           On sites you enable, NextEp searches MyAnimeList for the show name from the episode page,
-          and reads and updates your list under your own sign-in. Nothing goes to me.
+          and reads and updates your list under your own sign-in. Nothing goes to the developer.
           <a id="privacy" target="_blank" rel="noopener">Privacy policy</a>
         </p>
         <p class="muted">Signing in means you accept this privacy policy.</p>
@@ -22,24 +22,22 @@
           <span id="status" class="muted"></span>
         </div>
         <div class="row">
-          <label class="check"><input id="notifications" type="checkbox"> Show notifications</label>
-          <button id="testNote" type="button">Send a test notification</button>
+          <label class="check"><input id="openOnRecord" type="checkbox"> Open the popup for a moment when an episode is recorded</label>
         </div>
-        <p id="noteResult" class="muted" role="status"></p>
       </section>
 
       <section>
         <h2>Site rules</h2>
         <p class="muted">
-          The easiest way to add a site is the toolbar popup. Use "Enable on ..." or teach it two
-          example pages. You can also write a rule here. It applies when the page host is the rule host
-          or a subdomain of it.
+          The easiest way to add a website is the toolbar popup. Use "Enable on ..." or teach it two
+          example pages. You can also write a rule here. It applies when the page's website is the
+          rule's website or a subdomain of it.
         </p>
         <p class="muted">
           An address or tab title template is plain text with three blocks.
           <code>{show}</code> is the name of the show.
           <code>{episode}</code> is the episode number.
-          <code>{anything}</code> is any text I don't care about.
+          <code>{anything}</code> matches any text.
           For example, <code>/watch/{show}/ep-{episode}</code> matches
           <code>/watch/some-show-12/ep-4</code>.
           An address can end in query parameters, like /anime/watch?id={show}&amp;ep={episode}. They can come in any order and extra ones are ignored. The tab title template is optional. It gives the show name and is used as a cross-check.
@@ -47,12 +45,22 @@
           <code>(?&lt;slug&gt;...)</code> and <code>(?&lt;ep&gt;...)</code>.
         </p>
         <div id="sites"></div>
-        <button id="addSite" type="button">Add site</button>
+        <button id="addSite" type="button">Add website</button>
       </section>
 
-      <details id="advanced">
-        <summary>Advanced: use your own MyAnimeList API client</summary>
+      <div class="row">
+        <button id="save" type="button" class="primary">Save</button>
+        <span id="message" role="status"></span>
+      </div>
+      <p id="error" role="alert" hidden></p>
+
+      <details id="ownClient">
+        <summary id="ownClientTitle">For developers: use your own MyAnimeList API client</summary>
         <p id="noBuiltIn" class="muted" hidden>This build has no built-in Client ID, so you need your own.</p>
+        <p>
+          This is for people who build NextEp themselves or run their own version of it. If you
+          installed NextEp normally, you don't need it.
+        </p>
         <ol>
           <li>
             Go to <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">https://myanimelist.net/apiconfig</a>
@@ -73,15 +81,9 @@
         <p class="muted">Only needed if MyAnimeList gave you one for your app type. It's only sent together with your own Client ID.</p>
       </details>
 
-      <div class="row">
-        <button id="save" type="button" class="primary">Save</button>
-        <span id="message" role="status"></span>
-      </div>
-      <p id="error" role="alert" hidden></p>
-
       <footer class="muted">
         <p><a id="report" target="_blank" rel="noopener">Report a problem</a></p>
-        <p>NextEp is my own project. It isn't affiliated with or endorsed by MyAnimeList.</p>
+        <p>NextEp is an independent project. It isn't affiliated with or endorsed by MyAnimeList.</p>
       </footer>
     </main>
     <script type="module" src="options.js"></script>

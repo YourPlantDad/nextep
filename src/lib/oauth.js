@@ -144,7 +144,7 @@ export function createAuth({
 
   async function signIn() {
     const { clientId, clientSecret } = resolveClient(await store.getSettings(), builtInClientId);
-    if (!clientId) throw new Error("No Client ID. Enter your own under Advanced in the settings.");
+    if (!clientId) throw new Error("No Client ID. Set up your own API client at the bottom of the settings.");
     const redirectUri = getIdentity().getRedirectURL();
     const verifier = randomString(64);
     const state = randomString(32);

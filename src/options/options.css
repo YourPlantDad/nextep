@@ -86,27 +86,35 @@ input[type="password"] {
   margin: 8px 0;
 }
 
-.site {
-  display: grid;
-  gap: 6px;
+details.site {
   margin: 10px 0;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
 }
 
-.site label {
+details.site > summary {
+  font-weight: 600;
+}
+
+.fields {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.fields label {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
 }
 
-.site label input,
-.site label select {
+.fields label input,
+.fields label select {
   margin-top: 2px;
 }
 
-.site button {
+.fields button {
   justify-self: start;
 }
 
