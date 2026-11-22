@@ -13,18 +13,18 @@ NextEp remembers the last episode you opened for each show. When the page goes f
 - It remembers per show, not per tab. That survives a browser restart, and it works if the next episode opens in a new tab.
 - Automatic updates never lower your count. If MyAnimeList already shows N or more, nothing is written.
 - The status is set to "watching" if the anime isn't on your list yet or is on plan to watch. It's set to "completed" when the count reaches the total number of episodes.
-- If the anime is on hold or dropped, I don't overwrite that. Nothing is written and there's no notification. NextEp remembers the highest episode it would have recorded, and the popup offers a button to pick the show back up (see below).
-- If the episode number is higher than MyAnimeList's total, nothing is written and you get a notification. The site probably numbers episodes differently.
-- In the popup, the `−1` and `+1` buttons are the only things that can lower the count. "Mark episode N watched" never lowers it, and it's disabled ("Episode N already watched") if your list is already at N or beyond. On an anime that's on hold or dropped they change only the count and leave the status alone. Results of popup actions show in the popup, with no desktop notification.
+- If the anime is on hold or dropped, NextEp doesn't overwrite that. Nothing is written. NextEp remembers the highest episode it would have recorded, and the popup offers a button to pick the show back up (see below).
+- If the episode number is higher than MyAnimeList's total, nothing is written. The site probably numbers episodes differently.
+- In the popup, the `−1` and `+1` buttons are the only things that can lower the count. "Mark episode N watched" never lowers it, and it's disabled ("Episode N already watched") if your list is already at N or beyond. On an anime that's on hold or dropped they change only the count and leave the status alone. Results of popup actions show in the popup.
 
 ## The popup
 
 For a matched anime the popup shows, top to bottom, the title (a link to MyAnimeList), "Watched X / Y", a status menu, one main action, the `−1` and `+1` buttons, "Wrong anime?", and a footer with "Settings" and "Report a problem".
 
-- The status menu holds Watching, Completed, On hold, Dropped and Plan to watch. It shows "Not on your list" until the anime is on it. Changing it sends only the status. The one exception is Completed on an anime with a known total, which also sets the count to the total.
+- The status menu holds Watching, Completed, On hold, Dropped and Plan to watch. It shows "Not on your list" until the anime is on it. Changing it sends only the status. The one exception is Completed on an anime with a known total, which also sets the count to the total. The last entry, "Remove from your list…", asks first, and then takes the anime off your list, score and progress included. Watching another episode later adds it again like any new anime.
 - The main action is the first of these that applies. If the anime is on hold or dropped, it says so and offers "Set to watching and record episode N", where N is the larger of this page's episode and the highest episode NextEp skipped. If neither is known the button is just "Set to watching". The count never goes below what your list already has or above the total, and reaching the total completes the show. If the page is the last episode and your list is below the total, it offers "Mark as completed". Otherwise it's "Mark episode N watched".
 
-The toolbar badge shows `?` when the anime isn't confirmed, `!` when you're not signed in, `II` when the anime is on hold or dropped, and `end` when the page is the last episode and your list isn't completed. The `II` and `end` badges go by what NextEp last read from MyAnimeList, so they can be a little out of date.
+The toolbar badge shows `?` when the anime isn't confirmed, `!` when you're not signed in, `II` when the anime is on hold or dropped, `✓` on a green background when this page's episode was just recorded, and `end` when the page is the last episode and your list isn't completed. The `II` and `end` badges go by what NextEp last read from MyAnimeList, so they can be a little out of date.
 
 ## Install from source
 
@@ -40,7 +40,7 @@ A temporary add-on is gone after Firefox restarts. To keep it on release Firefox
 3. Click the NextEp toolbar button. If the page looks like `.../<slug>/ep-<n>`, click "Enable on <host>". Otherwise [teach NextEp the site](#teach-nextep-a-site).
 4. Watch. When you move on to the next episode, the previous one gets recorded.
 
-If this build has no built-in Client ID, do [Advanced: own API client](#advanced-own-api-client) first.
+If this build has no built-in Client ID, do [For developers: your own API client](#for-developers-your-own-api-client) first.
 
 ## How matching works
 
@@ -69,17 +69,17 @@ A rule only keeps the address parts it needs: the show name, the episode number,
 
 ### Templates
 
-A rule has a host, an address template and, if it needs one, a tab title template. You can edit them in the settings. A template is plain text with three blocks.
+A rule has a website, an address template and, if it needs one, a tab title template. You can edit them in the settings. A template is plain text with three blocks.
 
 - `{show}` is the name of the show. An address template needs exactly one.
 - `{episode}` is the episode number. It can show up once.
-- `{anything}` is any text I don't care about.
+- `{anything}` matches any text.
 
 Example: `/watch/{show}/ep-{episode}` matches `/watch/some-show-12/ep-4`.
 
 An address template is a path plus, if you want, a list of query parameters: `/anime/watch?id={show}&ep={episode}`. The path is matched against the decoded address, and a trailing `/` is optional. Every parameter in the template has to be in the page's address. The order doesn't matter and extra parameters are ignored. A parameter value is literal text or has one block in it. The tab title template is matched without caring about case, and any run of spaces, `-`, `:`, `|` and `·` in it matches any run of those. So `{show} Episode {episode}{anything}` matches both "Some Show Episode 2 English SUB at ExampleSite" and "Some Show - Episode 2". A leading "Watch " is dropped from the show name read out of a title. The show can also come after the number: `Episode {episode} {show}`.
 
-A rule also says where the episode number comes from: the address, the tab title, or nowhere. The host matches the page host exactly, or any subdomain of it (`notexample.tv` doesn't match `example.tv`).
+A rule also says where the episode number comes from: the address, the tab title, or nowhere. The website matches the page's website exactly, or any subdomain of it (`notexample.tv` doesn't match `example.tv`).
 
 ### Tab title as a source and a cross-check
 
@@ -93,11 +93,11 @@ Some sites show the episode number in neither the address nor the title. NextEp 
 
 ### Old regex rules
 
-Rules from earlier versions are still a host and a JavaScript regular expression, tested against the path plus query string. They need the named groups `(?<slug>...)` and `(?<ep>...)`. Example: `^/watch/(?<slug>[^/]+)/ep-(?<ep>\d+)`. The slug is URI-decoded and lowercased, and episode 0 never matches. The settings show these with a "Regex pattern" field.
+Rules from earlier versions are still a website and a JavaScript regular expression, tested against the path plus query string. They need the named groups `(?<slug>...)` and `(?<ep>...)`. Example: `^/watch/(?<slug>[^/]+)/ep-(?<ep>\d+)`. The slug is URI-decoded and lowercased, and episode 0 never matches. The settings show these with a "Regex pattern" field. Each rule is a collapsed entry that shows just the website. Open it to edit the fields or remove it. "Add website" adds a new one, already open.
 
-## Advanced: own API client
+## For developers: your own API client
 
-A build may come with a built-in MyAnimeList Client ID. If yours doesn't, or you'd rather use your own, open "Advanced" in the settings.
+This is for people who build NextEp themselves or run their own version of it. A normal install doesn't need it. A build without a built-in Client ID needs it before the first sign-in. It's the collapsed section at the bottom of the settings, "For developers: use your own MyAnimeList API client".
 
 1. Go to <https://myanimelist.net/apiconfig> and create an ID. Set App Type to "other" and "App Redirect URL" to the value shown in the settings (it comes from the add-on ID `nextep@yourplantdad.github.io`).
 2. Paste the Client ID into the settings and save. You only need a Client Secret if MyAnimeList gave you one for your app type. It's only ever sent together with your own Client ID.
@@ -105,9 +105,9 @@ A build may come with a built-in MyAnimeList Client ID. If yours doesn't, or you
 
 Changing the Client ID signs you out, because a token only works with the client that issued it.
 
-## Notifications
+## When an episode is recorded
 
-The settings have a "Show notifications" checkbox and a "Send a test notification" button next to it. The button tries to show a notification right away and tells you what happened. If NextEp says it sent one and nothing popped up, check the Windows notification settings for Firefox. If the icon is rejected, NextEp tries again without it.
+The toolbar badge shows `✓` on that page. NextEp also opens the popup for a moment with "Recorded episode N." and closes it after four seconds. Move the pointer over it or press a key to keep it open. This needs a recent Firefox (149 or later) and a focused window. Older versions just show the badge. The settings have a checkbox, "Open the popup for a moment when an episode is recorded", to turn it off.
 
 ## Permissions
 
@@ -116,7 +116,6 @@ The settings have a "Show notifications" checkbox and a "Send a test notificatio
 | `tabs` | Reading tab URLs and titles to spot episode changes (including in-page navigation) and to show the popup state. |
 | `storage` | Settings, tokens, show-to-anime matches, the last episode seen per show and the first example page while you teach a site. |
 | `identity` | The MyAnimeList sign-in flow (`launchWebAuthFlow`) and the redirect URL. |
-| `notifications` | Optional notices ("Tracking ...", "watched 4/23", match needs confirming). You can turn them off in settings. |
 | `https://api.myanimelist.net/*` | MyAnimeList API calls (search, read and update your list). |
 | `https://myanimelist.net/*` | Sign-in and token endpoints. |
 

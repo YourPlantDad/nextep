@@ -18,10 +18,10 @@ Nothing goes to me or to anyone else. NextEp has no analytics or tracking and lo
 
 This is in Firefox's extension storage:
 
-- your access and refresh tokens, and when they expire, plus your MyAnimeList username, which I only use to show who's signed in
-- your settings: the notification preference, your site rules and, if you entered them, your own Client ID and Client Secret (the secret is stored unencrypted in extension storage)
+- your access and refresh tokens, and when they expire, plus your MyAnimeList username, which is only used to show who's signed in
+- your settings: whether the popup opens when an episode is recorded, your site rules and, if you entered them, your own Client ID and Client Secret (the secret is stored unencrypted in extension storage)
 - show matches: for each show, the site host and the name from the URL, the matched anime and the candidate matches, and any episode waiting for confirmation
-- the last episode seen for each show, with a timestamp
+- the last episode seen for each show, with a timestamp, and the last episode recorded to your list, with a timestamp
 - while you teach a site, the address and tab title of the first example page, until you finish or start over
 
 ## Which pages are read
