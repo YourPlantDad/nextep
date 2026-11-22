@@ -6,12 +6,15 @@ import { BUILT_IN_CLIENT_ID, resolveClient } from "../lib/config.js";
 import {
   parseUrl,
   parseTab,
+  pickEpisode,
   visitTrigger,
   hostHasRule,
   detectGeneric,
   validateRules,
   GENERIC_PATTERN,
 } from "../lib/url-parser.js";
+import { badgeText } from "../lib/badge.js";
+import { LIST_STATUSES } from "../lib/progress.js";
 import { learnRule } from "../lib/learn.js";
 import { toHttpUrl, siteHost, normalizeHost } from "../lib/template.js";
 
@@ -19,17 +22,26 @@ const store = createStore();
 const auth = createAuth({ store });
 const api = createApi({ tokens: auth });
 
+// Tries with the icon first. If that is rejected, tries once more without it.
+async function createNotification(message) {
+  const options = { type: "basic", title: "NextEp", message };
+  try {
+    await browser.notifications.create({
+      ...options,
+      iconUrl: browser.runtime.getURL("icons/icon.svg"),
+    });
+  } catch (e) {
+    console.error("NextEp: notification with icon failed:", e);
+    await browser.notifications.create(options);
+  }
+}
+
 async function notify(message) {
   // Must never throw. By now the caller has already written to storage or MAL.
   try {
     const { notifications } = await store.getSettings();
     if (notifications === false) return;
-    await browser.notifications.create({
-      type: "basic",
-      iconUrl: browser.runtime.getURL("icons/icon.svg"),
-      title: "NextEp",
-      message,
-    });
+    await createNotification(message);
   } catch (e) {
     console.error("NextEp: notification failed:", e);
   }
@@ -40,14 +52,10 @@ const tracker = createTracker({ store, api, notify });
 async function updateBadge(tabId, tab) {
   const { sites } = await store.getSettings();
   const parsed = parseTab(tab, sites);
-  let text = "";
-  if (parsed) {
-    if (!(await store.isSignedIn())) text = "!";
-    else {
-      const mapping = await store.getMapping(parsed.key);
-      if (!mapping || !mapping.confirmed || mapping.malId === null) text = "?";
-    }
-  }
+  const signedIn = parsed ? await store.isSignedIn() : false;
+  const mapping = parsed && signedIn ? ((await store.getMapping(parsed.key)) ?? null) : null;
+  const { episode } = pickEpisode(parsed, mapping?.numEpisodes ?? 0);
+  const text = badgeText({ signedIn, parsed, mapping, episode });
   await browser.browserAction.setBadgeText({ tabId, text });
 }
 
@@ -102,8 +110,8 @@ const handlers = {
         state.apiError = e.message;
       }
     }
-    const mapping = parsed ? ((await store.getMapping(parsed.key)) ?? null) : null;
-    state.mapping = mapping;
+    const read = async () => (parsed ? ((await store.getMapping(parsed.key)) ?? null) : null);
+    let mapping = await read();
     if (signedIn && mapping?.malId) {
       try {
         const node = await api.details(mapping.malId, "num_episodes,my_list_status");
@@ -111,10 +119,16 @@ const handlers = {
           numEpisodes: node.num_episodes ?? 0,
           listStatus: node.my_list_status ?? null,
         };
+        // Keeps the badge and the paused flag in step with what MyAnimeList says.
+        if (mapping.confirmed) {
+          await tracker.noteListStatus(parsed.key, state.anime.listStatus);
+          mapping = await read();
+        }
       } catch (e) {
         state.apiError ??= e.message;
       }
     }
+    state.mapping = mapping;
     return state;
   },
 
@@ -126,8 +140,22 @@ const handlers = {
     const result = await tracker.applyProgress(mapping.malId, episodes, {
       force: force === true,
       silent: true,
+      key,
     });
     return { result };
+  },
+
+  async setStatus({ key, status }) {
+    if (!LIST_STATUSES.includes(status)) throw new Error("That isn't a list status.");
+    // The popup shows the result, so no desktop notification.
+    return { result: await tracker.setStatus(key, status) };
+  },
+
+  async resume({ key, episode }) {
+    if (episode != null && !Number.isInteger(episode)) {
+      throw new Error("Episode must be a whole number.");
+    }
+    return { result: await tracker.resume(key, episode ?? null) };
   },
 
   async search({ query }) {
@@ -214,6 +242,20 @@ const handlers = {
     return {};
   },
 
+  async getAccount() {
+    const signedIn = await store.isSignedIn();
+    return { signedIn, name: signedIn ? await auth.getUserName() : null };
+  },
+
+  async testNotification() {
+    try {
+      await createNotification("This is a test notification from NextEp.");
+      return { sent: true };
+    } catch (e) {
+      return { sent: false, error: e?.message ?? String(e) };
+    }
+  },
+
   async getSettings() {
     return {
       settings: await store.getSettings(),
@@ -261,7 +303,7 @@ const handlers = {
   },
 };
 
-const mutating = new Set(["selectMapping", "setWatched", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
+const mutating = new Set(["selectMapping", "setWatched", "setStatus", "resume", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
 
 browser.runtime.onMessage.addListener(async (message) => {
   try {

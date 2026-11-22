@@ -1,5 +1,6 @@
 import { REPO_URL } from "../lib/config.js";
 import { pickEpisode } from "../lib/url-parser.js";
+import { isLastEpisode, isPaused, LIST_STATUSES } from "../lib/progress.js";
 
 const app = document.getElementById("app");
 const errorLine = document.getElementById("error");
@@ -48,6 +49,8 @@ async function act(fn) {
     if (!res.ok) error = res.error;
     else if (res.result?.skip === "exceeds-total") {
       error = "That episode number is higher than the total on MyAnimeList.";
+    } else if (res.result?.skip === "paused") {
+      error = "This anime is on hold or dropped, so I didn't change anything.";
     }
   } catch (e) {
     error = e.message ?? String(e);
@@ -120,14 +123,73 @@ function renderUnconfirmed(s) {
   ];
 }
 
+function statusSelect(key, listStatus, disabled) {
+  const select = el("select", {
+    disabled,
+    onchange: (e) => act(() => send({ type: "setStatus", key, status: e.target.value })),
+  });
+  if (!listStatus) {
+    select.append(new Option("Not on your list", "", true, true));
+    select.options[0].disabled = true;
+  }
+  for (const value of LIST_STATUSES) select.append(new Option(STATUS_LABELS[value], value));
+  select.value = listStatus?.status ?? "";
+  return el("label", { className: "field" }, "Status", select);
+}
+
+// One area that holds the single most useful action for this page.
+function mainAction({ s, key, episode, total, watched, hasEpisode, unclear, alreadyWatched }) {
+  const setWatched = (episodes, force) => () =>
+    act(() => send({ type: "setWatched", key, episodes, force }));
+  const noData = !s.anime;
+  const status = s.anime?.listStatus?.status;
+  if (!noData && isPaused(status)) {
+    let next = Math.max(hasEpisode ? episode : 0, s.mapping.pausedEpisode ?? 0);
+    if (total > 0) next = Math.min(next, total);
+    return [
+      el("p", {
+        textContent:
+          status === "on_hold"
+            ? "You've got this anime on hold. Pick it back up?"
+            : "You dropped this anime. Pick it back up?",
+      }),
+      el("div", { className: "row" },
+        button(
+          next > 0 ? `Set to watching and record episode ${next}` : "Set to watching",
+          () => act(() => send({ type: "resume", key, episode: hasEpisode ? episode : null })),
+          { className: "primary" },
+        ),
+      ),
+    ];
+  }
+  if (!noData && isLastEpisode({ episode: hasEpisode ? episode : null, total, watched })) {
+    return [
+      el("p", { textContent: "This is the last episode." }),
+      el("div", { className: "row" },
+        button("Mark as completed", setWatched(total, false), { className: "primary" }),
+      ),
+    ];
+  }
+  if (hasEpisode) {
+    return [
+      el("div", { className: "row" },
+        button(
+          alreadyWatched ? `Episode ${episode} already watched` : `Mark episode ${episode} watched`,
+          setWatched(episode, false),
+          { className: "primary", disabled: busy || noData || alreadyWatched },
+        ),
+      ),
+    ];
+  }
+  if (unclear) return [el("p", { className: "muted", textContent: "I can't tell which episode this page is." })];
+  return [];
+}
+
 function renderConfirmed(s) {
   const { key, source } = s.parsed;
   const total = s.anime?.numEpisodes || s.mapping.numEpisodes || 0;
   const { episode } = pickEpisode(s.parsed, total);
   const watched = s.anime?.listStatus?.num_episodes_watched ?? 0;
-  const status = s.anime
-    ? (STATUS_LABELS[s.anime.listStatus?.status] ?? "Not on your list")
-    : "Unknown";
   const setWatched = (episodes, force) => () =>
     act(() => send({ type: "setWatched", key, episodes, force }));
   const noData = !s.anime;
@@ -142,26 +204,16 @@ function renderConfirmed(s) {
       textContent: s.mapping.title,
     })),
     el("p", { textContent: `Watched ${watched} / ${total || "?"}` }),
-    el("p", { className: "muted", textContent: `List status: ${status}` }),
+    noData
+      ? el("p", { className: "muted", textContent: "List status: unknown" })
+      : statusSelect(key, s.anime.listStatus, busy),
+    ...mainAction({ s, key, episode, total, watched, hasEpisode, unclear, alreadyWatched }),
     el(
       "div",
       { className: "row" },
       button("−1", setWatched(watched - 1, true), { disabled: busy || noData || watched <= 0 }),
       button("+1", setWatched(watched + 1, true), { disabled: busy || noData }),
     ),
-    ...(hasEpisode
-      ? [
-          el("div", { className: "row" },
-            button(
-              alreadyWatched ? `Episode ${episode} already watched` : `Mark episode ${episode} watched`,
-              setWatched(episode, false),
-              { className: "primary", disabled: busy || noData || alreadyWatched },
-            ),
-          ),
-        ]
-      : unclear
-        ? [el("p", { className: "muted", textContent: "I can't tell which episode this page is." })]
-        : []),
     ...(source === "none"
       ? [el("p", { className: "muted", textContent: "This site can't be tracked automatically." })]
       : []),
@@ -302,6 +354,15 @@ tabTitle = tab?.title ?? "";
 await load();
 
 document.getElementById("footer").append(
+  el("button", {
+    type: "button",
+    className: "link",
+    textContent: "Settings",
+    onclick: () => {
+      browser.runtime.openOptionsPage();
+      window.close();
+    },
+  }),
   el("a", {
     href: `${REPO_URL}/issues/new/choose`,
     target: "_blank",
