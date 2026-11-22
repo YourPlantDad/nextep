@@ -3,7 +3,17 @@ import { createAuth } from "../lib/oauth.js";
 import { createApi } from "../lib/mal-api.js";
 import { createTracker } from "../lib/tracker.js";
 import { BUILT_IN_CLIENT_ID, resolveClient } from "../lib/config.js";
-import { parseUrl, detectGeneric, validateRules, GENERIC_PATTERN } from "../lib/url-parser.js";
+import {
+  parseUrl,
+  parseTab,
+  visitTrigger,
+  hostHasRule,
+  detectGeneric,
+  validateRules,
+  GENERIC_PATTERN,
+} from "../lib/url-parser.js";
+import { learnRule } from "../lib/learn.js";
+import { toHttpUrl, siteHost, normalizeHost } from "../lib/template.js";
 
 const store = createStore();
 const auth = createAuth({ store });
@@ -27,9 +37,9 @@ async function notify(message) {
 
 const tracker = createTracker({ store, api, notify });
 
-async function updateBadge(tabId, url) {
+async function updateBadge(tabId, tab) {
   const { sites } = await store.getSettings();
-  const parsed = parseUrl(url, sites);
+  const parsed = parseTab(tab, sites);
   let text = "";
   if (parsed) {
     if (!(await store.isSignedIn())) text = "!";
@@ -43,44 +53,51 @@ async function updateBadge(tabId, url) {
 
 async function refreshActiveBadge() {
   const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab?.url) await updateBadge(tab.id, tab.url);
+  if (tab?.url) await updateBadge(tab.id, tab);
 }
 
 browser.tabs.onUpdated.addListener(
-  async (tabId, changeInfo) => {
-    if (!changeInfo.url) return;
+  async (tabId, changeInfo, tab) => {
+    if (!tab?.url) return;
     try {
       const { sites } = await store.getSettings();
-      const parsed = parseUrl(changeInfo.url, sites);
-      if (parsed) await tracker.handleVisit(parsed);
+      const parsed = parseTab(tab, sites);
+      const trigger = visitTrigger(parsed, changeInfo);
+      // Pages with no episode source are only matched when the popup opens.
+      if (trigger && parsed.source !== "none") await tracker.handleVisit(parsed, trigger);
     } catch (e) {
       console.error("NextEp:", e);
     }
-    await updateBadge(tabId, changeInfo.url).catch(() => {});
+    await updateBadge(tabId, tab).catch(() => {});
   },
-  { properties: ["url"] },
+  { properties: ["url", "title", "status"] },
 );
 
 const MATCH_FIELDS = "media_type,num_episodes,start_season";
 
 const handlers = {
-  async getState({ url }) {
+  async getState({ url, title }) {
     const settings = await store.getSettings();
     const { sites } = settings;
-    const parsed = parseUrl(url, sites);
+    const parsed = parseTab({ url, title }, sites);
+    const hasRule = hostHasRule(url, sites);
+    const page = toHttpUrl(url);
+    const sample = await store.getTeach();
     const signedIn = await store.isSignedIn();
     const state = {
       signedIn,
       hasClientId: Boolean(resolveClient(settings).clientId),
       parsed,
-      generic: parsed ? null : detectGeneric(url),
+      generic: parsed || hasRule ? null : detectGeneric(url),
+      hostHasRule: hasRule,
+      teach: page && sample?.host === siteHost(page) ? sample : null,
       mapping: null,
       anime: null,
     };
     // The page may have been opened while signed out, so no mapping exists yet.
     if (signedIn && parsed) {
       try {
-        await tracker.ensureMapping(parsed.key, parsed.slug);
+        await tracker.ensureMapping(parsed.key, parsed.slug, parsed.titleName);
       } catch (e) {
         state.apiError = e.message;
       }
@@ -150,6 +167,43 @@ const handlers = {
     return {};
   },
 
+  async teachStart({ url, title }) {
+    const page = toHttpUrl(url);
+    if (!page) throw new Error("I can only learn from http or https pages.");
+    await store.setTeach({ host: siteHost(page), url, title: String(title ?? ""), at: Date.now() });
+    return {};
+  },
+
+  async teachFinish({ url, title }) {
+    const first = await store.getTeach();
+    if (!first) throw new Error("Open episode 1 first and click \"This is episode 1\".");
+    const learned = learnRule(first, { url, title: String(title ?? "") });
+    // On failure the first page stays, so the user can try another second page.
+    if (!learned.ok) throw new Error(learned.error);
+    const settings = await store.getSettings();
+    const sites = [
+      ...settings.sites.filter((r) => normalizeHost(r.host) !== learned.rule.host),
+      learned.rule,
+    ];
+    await store.saveSettings({ ...settings, sites });
+    await store.clearTeach();
+    // Record this page too, so the next episode counts as a step from it.
+    const parsed = parseTab({ url, title }, sites);
+    if (parsed) {
+      try {
+        await tracker.handleVisit(parsed, "title");
+      } catch (e) {
+        console.error("NextEp:", e);
+      }
+    }
+    return { rule: learned.rule, episodeFrom: learned.episodeFrom };
+  },
+
+  async teachCancel() {
+    await store.clearTeach();
+    return {};
+  },
+
   async signIn() {
     await auth.signIn();
     return {};
@@ -168,10 +222,18 @@ const handlers = {
   },
 
   async saveSettings({ settings }) {
-    const sites = (settings.sites ?? []).map((r) => ({
-      host: String(r.host ?? "").trim().toLowerCase(),
-      pattern: String(r.pattern ?? "").trim(),
-    }));
+    const sites = (settings.sites ?? []).map((r) => {
+      const host = String(r.host ?? "").trim().toLowerCase();
+      if (r.url === undefined) return { host, pattern: String(r.pattern ?? "").trim() };
+      const rule = {
+        host,
+        url: String(r.url ?? "").trim(),
+        episodeFrom: String(r.episodeFrom ?? ""),
+      };
+      const title = String(r.title ?? "").trim();
+      if (title) rule.title = title;
+      return rule;
+    });
     const problem = validateRules(sites);
     if (problem) throw new Error(problem);
     const previous = await store.getSettings();
@@ -199,7 +261,7 @@ const handlers = {
   },
 };
 
-const mutating = new Set(["selectMapping", "setWatched", "enableSite", "signIn", "signOut", "saveSettings"]);
+const mutating = new Set(["selectMapping", "setWatched", "enableSite", "teachFinish", "signIn", "signOut", "saveSettings"]);
 
 browser.runtime.onMessage.addListener(async (message) => {
   try {

@@ -27,9 +27,19 @@
       <section>
         <h2>Site rules</h2>
         <p class="muted">
-          You can enable a site from the toolbar popup ("Enable on ...") or add a rule here. A rule applies
-          when the page host is the rule host or a subdomain of it. The pattern is a regular
-          expression tested against the path plus query string. It needs the named groups
+          The easiest way to add a site is the toolbar popup. Use "Enable on ..." or teach it two
+          example pages. You can also write a rule here. It applies when the page host is the rule host
+          or a subdomain of it.
+        </p>
+        <p class="muted">
+          An address or tab title template is plain text with three blocks.
+          <code>{show}</code> is the name of the show.
+          <code>{episode}</code> is the episode number.
+          <code>{anything}</code> is any text I don't care about.
+          For example, <code>/watch/{show}/ep-{episode}</code> matches
+          <code>/watch/some-show-12/ep-4</code>.
+          An address can end in query parameters, like /anime/watch?id={show}&amp;ep={episode}. They can come in any order and extra ones are ignored. The tab title template is optional. It gives the show name and is used as a cross-check.
+          Old rules keep a regular expression pattern with the named groups
           <code>(?&lt;slug&gt;...)</code> and <code>(?&lt;ep&gt;...)</code>.
         </p>
         <div id="sites"></div>

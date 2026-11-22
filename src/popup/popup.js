@@ -1,4 +1,5 @@
 import { REPO_URL } from "../lib/config.js";
+import { pickEpisode } from "../lib/url-parser.js";
 
 const app = document.getElementById("app");
 const errorLine = document.getElementById("error");
@@ -13,12 +14,14 @@ const STATUS_LABELS = {
 };
 
 let tabUrl = "";
+let tabTitle = "";
 let state = null;
 let busy = false;
 let error = "";
 let showSearch = false;
 let query = "";
 let results = [];
+let learned = null;
 
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
@@ -31,7 +34,7 @@ function button(label, onclick, props = {}) {
 }
 
 async function load() {
-  state = await send({ type: "getState", url: tabUrl });
+  state = await send({ type: "getState", url: tabUrl, title: tabTitle });
   if (!state.ok) error = state.error;
   paint();
 }
@@ -118,8 +121,9 @@ function renderUnconfirmed(s) {
 }
 
 function renderConfirmed(s) {
-  const { key, episode } = s.parsed;
+  const { key, source } = s.parsed;
   const total = s.anime?.numEpisodes || s.mapping.numEpisodes || 0;
+  const { episode } = pickEpisode(s.parsed, total);
   const watched = s.anime?.listStatus?.num_episodes_watched ?? 0;
   const status = s.anime
     ? (STATUS_LABELS[s.anime.listStatus?.status] ?? "Not on your list")
@@ -127,7 +131,9 @@ function renderConfirmed(s) {
   const setWatched = (episodes, force) => () =>
     act(() => send({ type: "setWatched", key, episodes, force }));
   const noData = !s.anime;
-  const alreadyWatched = !noData && episode <= watched;
+  const hasEpisode = episode !== null && !(total > 0 && episode > total);
+  const unclear = source !== "none" && !hasEpisode;
+  const alreadyWatched = hasEpisode && !noData && episode <= watched;
   return [
     el("h1", {}, el("a", {
       href: `https://myanimelist.net/anime/${s.mapping.malId}`,
@@ -143,13 +149,22 @@ function renderConfirmed(s) {
       button("−1", setWatched(watched - 1, true), { disabled: busy || noData || watched <= 0 }),
       button("+1", setWatched(watched + 1, true), { disabled: busy || noData }),
     ),
-    el("div", { className: "row" },
-      button(
-        alreadyWatched ? `Episode ${episode} already watched` : `Mark episode ${episode} watched`,
-        setWatched(episode, false),
-        { className: "primary", disabled: busy || noData || alreadyWatched },
-      ),
-    ),
+    ...(hasEpisode
+      ? [
+          el("div", { className: "row" },
+            button(
+              alreadyWatched ? `Episode ${episode} already watched` : `Mark episode ${episode} watched`,
+              setWatched(episode, false),
+              { className: "primary", disabled: busy || noData || alreadyWatched },
+            ),
+          ),
+        ]
+      : unclear
+        ? [el("p", { className: "muted", textContent: "I can't tell which episode this page is." })]
+        : []),
+    ...(source === "none"
+      ? [el("p", { className: "muted", textContent: "This site can't be tracked automatically." })]
+      : []),
     showSearch
       ? searchBox(key)
       : el("button", {
@@ -164,14 +179,72 @@ function renderConfirmed(s) {
   ];
 }
 
-function renderUntracked(s) {
-  const nodes = [
-    el("p", {
-      textContent: s.generic
-        ? "This site isn't enabled yet."
-        : "This page isn't a tracked episode page.",
-    }),
+function teachSection(s) {
+  const nodes = [];
+  if (!s.teach) {
+    nodes.push(
+      el("p", { textContent: "Is this an anime site? Open episode 1 of any anime here, then click this." }),
+      button(
+        "This is episode 1",
+        () => act(() => send({ type: "teachStart", url: tabUrl, title: tabTitle })),
+        { className: "primary" },
+      ),
+    );
+  } else {
+    nodes.push(
+      el("p", { textContent: "Now open episode 2 of the same anime and click this." }),
+      button(
+        "This is episode 2",
+        async () => {
+          await act(async () => {
+            const res = await send({ type: "teachFinish", url: tabUrl, title: tabTitle });
+            if (res.ok) learned = res;
+            return res;
+          });
+        },
+        { className: "primary" },
+      ),
+      el("button", {
+        type: "button",
+        className: "link",
+        textContent: "Start over",
+        disabled: busy,
+        onclick: () => act(() => send({ type: "teachCancel" })),
+      }),
+    );
+  }
+  return [el("div", { className: "teach" }, ...nodes)];
+}
+
+const LEARNED_SENTENCES = {
+  url: "I found the episode number in the address.",
+  title: "I found the episode number in the tab title.",
+  none: "I couldn't find the episode number on this site, so use the buttons here to update your list.",
+};
+
+function renderLearned() {
+  return [
+    el("p", { textContent: LEARNED_SENTENCES[learned.episodeFrom] ?? LEARNED_SENTENCES.none }),
+    el("p", { className: "muted" }, "Address: ", el("code", { textContent: learned.rule.url })),
   ];
+}
+
+function renderUntracked(s) {
+  if (!/^https?:/i.test(tabUrl)) {
+    return [el("p", { textContent: "NextEp keeps track of the anime episodes you watch. There's nothing to track on this page." })];
+  }
+  const nodes = [];
+  if (s.hostHasRule) {
+    nodes.push(el("h1", { textContent: "This page doesn't match the rule for this site." }));
+  } else {
+    nodes.push(
+      el("p", {
+        textContent: s.generic
+          ? "This looks like an anime episode page, but this site isn't enabled yet."
+          : "NextEp keeps track of the anime episodes you watch. I don't know this site yet.",
+      }),
+    );
+  }
   if (s.generic) {
     nodes.push(
       el("p", {
@@ -185,6 +258,7 @@ function renderUntracked(s) {
       ),
     );
   }
+  nodes.push(...teachSection(s));
   return nodes;
 }
 
@@ -212,6 +286,8 @@ function paint() {
   else if (state.mapping?.confirmed && state.mapping.malId) nodes = renderConfirmed(state);
   else nodes = renderUnconfirmed(state);
 
+  if (learned) nodes.unshift(...renderLearned());
+
   if (state.apiError) {
     error ||= state.apiError;
     errorLine.hidden = false;
@@ -222,6 +298,7 @@ function paint() {
 
 const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
 tabUrl = tab?.url ?? "";
+tabTitle = tab?.title ?? "";
 await load();
 
 document.getElementById("footer").append(

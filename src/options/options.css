@@ -87,17 +87,37 @@ input[type="password"] {
 }
 
 .site {
-  display: flex;
-  gap: 8px;
-  margin: 6px 0;
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
-.site input:first-child {
-  flex: 1;
+.site label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 
-.site input:nth-child(2) {
-  flex: 3;
+.site label input,
+.site label select {
+  margin-top: 2px;
+}
+
+.site button {
+  justify-self: start;
+}
+
+select {
+  display: block;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
 }
 
 button {

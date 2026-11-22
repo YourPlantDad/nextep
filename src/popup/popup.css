@@ -119,3 +119,13 @@ input[type="search"] {
 footer {
   margin-top: 12px;
 }
+
+.teach {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+code {
+  overflow-wrap: anywhere;
+}
