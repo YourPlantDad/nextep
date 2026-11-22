@@ -6,6 +6,26 @@ const send = (message) => browser.runtime.sendMessage(message);
 let signedIn = false;
 let userName = null;
 
+const CHANGED_ELSEWHERE = "Settings were changed somewhere else. Reload this page before saving.";
+
+// Edits in the form that are not saved yet.
+let dirty = false;
+// Why Save is off, or "" when it is on. Saving then could overwrite settings with a stale or empty form.
+let blockReason = "";
+// The settings as last loaded or saved, to tell this page's own saves from changes made elsewhere.
+let baseline = "";
+let saving = false;
+
+function markDirty() {
+  dirty = true;
+}
+
+function block(reason) {
+  blockReason = reason;
+  $("save").disabled = true;
+  showError(reason);
+}
+
 function showError(text) {
   $("error").textContent = text;
   $("error").hidden = !text;
@@ -84,7 +104,10 @@ function siteRow(rule, { open = false } = {}) {
     Object.assign(document.createElement("button"), {
       type: "button",
       textContent: "Remove",
-      onclick: () => entry.remove(),
+      onclick: () => {
+        entry.remove();
+        markDirty();
+      },
     }),
   );
   entry.append(summary, fields);
@@ -134,33 +157,94 @@ async function run(button, fn) {
     showError(e.message ?? String(e));
     return { ok: false };
   } finally {
-    button.disabled = false;
+    button.disabled = button === $("save") && Boolean(blockReason);
   }
 }
 
 async function refreshStatus() {
-  const state = await send({ type: "getAccount" });
+  let state;
+  try {
+    state = await send({ type: "getAccount" });
+  } catch {
+    state = { ok: false };
+  }
   signedIn = Boolean(state.ok && state.signedIn);
   userName = signedIn ? (state.name ?? null) : null;
   paintAuth();
 }
 
-async function save() {
-  const res = await send({ type: "saveSettings", settings: collect() });
-  if (res.ok) {
-    $("message").textContent = res.signedOut
-      ? "Saved. You were signed out because the Client ID changed."
-      : "Saved.";
-    if (res.signedOut) await refreshStatus();
+// Fills the form from storage. Returns false, with Save off, when that fails.
+async function loadForm() {
+  let res;
+  try {
+    res = await send({ type: "getSettings" });
+  } catch (e) {
+    res = { ok: false, error: e?.message ?? String(e) };
   }
-  return res;
+  if (!res?.ok) {
+    block(res?.error || "The settings couldn't be loaded. Reload this page.");
+    return false;
+  }
+  const { settings } = res;
+  $("clientId").value = settings.clientId;
+  $("clientSecret").value = settings.clientSecret;
+  $("openOnRecord").checked = settings.openOnRecord !== false;
+  $("sites").replaceChildren(...settings.sites.map((rule) => siteRow(rule)));
+  // Only open this up front if the build has no built-in ID.
+  $("ownClient").open = !res.hasBuiltInClientId;
+  if (!res.hasBuiltInClientId) {
+    $("ownClientTitle").textContent = "Set up your own MyAnimeList API client";
+  }
+  $("noBuiltIn").hidden = res.hasBuiltInClientId;
+  baseline = JSON.stringify(settings);
+  dirty = false;
+  blockReason = "";
+  $("save").disabled = false;
+  showError("");
+  return true;
 }
 
+async function save() {
+  if (blockReason) return { ok: false, error: blockReason };
+  saving = true;
+  try {
+    const res = await send({ type: "saveSettings", settings: collect() });
+    if (res.ok) {
+      // Shows the saved values, and makes them the baseline for changes made elsewhere.
+      await loadForm();
+      $("message").textContent = res.signedOut
+        ? "Saved. You were signed out because the Client ID changed."
+        : "Saved.";
+      if (res.signedOut) await refreshStatus();
+    }
+    return res;
+  } finally {
+    saving = false;
+  }
+}
+
+// Another page (the popup, say) changed the settings while this one is open.
+async function onSettingsChanged() {
+  const res = await send({ type: "getSettings" });
+  if (!res.ok || JSON.stringify(res.settings) === baseline) return;
+  if (dirty) block(CHANGED_ELSEWHERE);
+  else await loadForm();
+}
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.settings || saving) return;
+  onSettingsChanged().catch(() => {});
+});
+
 $("save").addEventListener("click", (e) => run(e.target, save));
+
+document.addEventListener("input", markDirty);
+document.addEventListener("change", markDirty);
 
 $("addSite").addEventListener("click", () => {
   const entry = siteRow({ host: "", url: "", title: "", episodeFrom: "url" }, { open: true });
   $("sites").append(entry);
+  markDirty();
   entry.querySelector("input").focus();
 });
 
@@ -185,21 +269,11 @@ $("auth").addEventListener("click", (e) =>
 $("privacy").href = `${REPO_URL}/blob/main/PRIVACY.md`;
 $("report").href = `${REPO_URL}/issues/new/choose`;
 
-const [settings, redirect] = await Promise.all([
-  send({ type: "getSettings" }),
-  send({ type: "getRedirectUrl" }),
-]);
-if (settings.ok) {
-  $("clientId").value = settings.settings.clientId;
-  $("clientSecret").value = settings.settings.clientSecret;
-  $("openOnRecord").checked = settings.settings.openOnRecord !== false;
-  $("sites").replaceChildren(...settings.settings.sites.map((rule) => siteRow(rule)));
-  // Only open this up front if the build has no built-in ID.
-  $("ownClient").open = !settings.hasBuiltInClientId;
-  if (!settings.hasBuiltInClientId) {
-    $("ownClientTitle").textContent = "Set up your own MyAnimeList API client";
-  }
-  $("noBuiltIn").hidden = settings.hasBuiltInClientId;
-} else showError(settings.error);
-if (redirect.ok) $("redirect").value = redirect.url;
+await loadForm();
+try {
+  const redirect = await send({ type: "getRedirectUrl" });
+  if (redirect.ok) $("redirect").value = redirect.url;
+} catch {
+  // The redirect address is only shown for copying.
+}
 await refreshStatus();

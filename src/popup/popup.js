@@ -59,8 +59,13 @@ function button(label, onclick, props = {}) {
 }
 
 async function load() {
-  state = await send({ type: "getState", url: tabUrl, title: tabTitle });
-  if (!state.ok) error = state.error;
+  try {
+    state = await send({ type: "getState", url: tabUrl, title: tabTitle });
+    if (!state.ok) error = state.error;
+  } catch {
+    state = null;
+    error = "Couldn't reach the extension. Close this and try again.";
+  }
   paint();
 }
 
@@ -247,8 +252,8 @@ function renderConfirmed(s) {
   const total = s.anime?.numEpisodes || s.mapping.numEpisodes || 0;
   const { episode } = pickEpisode(s.parsed, total);
   const watched = s.anime?.listStatus?.num_episodes_watched ?? 0;
-  const setWatched = (episodes, force) => () =>
-    act(() => send({ type: "setWatched", key, episodes, force }));
+  // The background applies the change to the count as it is when the message arrives.
+  const adjustWatched = (delta) => () => act(() => send({ type: "adjustWatched", key, delta }));
   const noData = !s.anime;
   const hasEpisode = episode !== null && !(total > 0 && episode > total);
   const unclear = source !== "none" && !hasEpisode;
@@ -271,8 +276,8 @@ function renderConfirmed(s) {
           el(
             "div",
             { className: "row" },
-            button("−1", setWatched(watched - 1, true), { disabled: busy || noData || watched <= 0 }),
-            button("+1", setWatched(watched + 1, true), { disabled: busy || noData }),
+            button("−1", adjustWatched(-1), { disabled: busy || noData || watched <= 0 }),
+            button("+1", adjustWatched(1), { disabled: busy || noData }),
           ),
         ]),
     ...(source === "none"
@@ -414,13 +419,6 @@ function paint() {
   app.replaceChildren(...nodes);
 }
 
-const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-tabUrl = tab?.url ?? "";
-tabTitle = tab?.title ?? "";
-await readJustRecorded();
-await load();
-if (justRecorded && justRecorded.key === state?.parsed?.key) closeSoon();
-
 document.getElementById("footer").append(
   el("button", {
     type: "button",
@@ -438,3 +436,10 @@ document.getElementById("footer").append(
     textContent: "Report a problem",
   }),
 );
+
+const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+tabUrl = tab?.url ?? "";
+tabTitle = tab?.title ?? "";
+await readJustRecorded();
+await load();
+if (justRecorded && justRecorded.key === state?.parsed?.key) closeSoon();
