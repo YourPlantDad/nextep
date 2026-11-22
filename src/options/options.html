@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>NextEp settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>NextEp</h1>
+
+      <section>
+        <h2>Sign in to MyAnimeList</h2>
+        <p>
+          On sites you enable, NextEp searches MyAnimeList for the show name from the episode page,
+          and reads and updates your list under your own sign-in. Nothing goes to me.
+          <a id="privacy" target="_blank" rel="noopener">Privacy policy</a>
+        </p>
+        <p class="muted">Signing in means you accept this privacy policy.</p>
+        <div class="row">
+          <button id="auth" type="button" class="primary"></button>
+          <span id="status" class="muted"></span>
+        </div>
+        <label class="check"><input id="notifications" type="checkbox"> Show notifications</label>
+      </section>
+
+      <section>
+        <h2>Site rules</h2>
+        <p class="muted">
+          You can enable a site from the toolbar popup ("Enable on ...") or add a rule here. A rule applies
+          when the page host is the rule host or a subdomain of it. The pattern is a regular
+          expression tested against the path plus query string. It needs the named groups
+          <code>(?&lt;slug&gt;...)</code> and <code>(?&lt;ep&gt;...)</code>.
+        </p>
+        <div id="sites"></div>
+        <button id="addSite" type="button">Add site</button>
+      </section>
+
+      <details id="advanced">
+        <summary>Advanced: use your own MyAnimeList API client</summary>
+        <p id="noBuiltIn" class="muted" hidden>This build has no built-in Client ID, so you need your own.</p>
+        <ol>
+          <li>
+            Go to <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">https://myanimelist.net/apiconfig</a>
+            and create an ID. Set App Type to "other" and set "App Redirect URL" to the value below.
+          </li>
+          <li>Paste the Client ID below and save.</li>
+          <li>Sign in.</li>
+        </ol>
+        <label for="redirect">App Redirect URL</label>
+        <div class="row">
+          <input id="redirect" type="text" readonly>
+          <button id="copy" type="button">Copy</button>
+        </div>
+        <label for="clientId">Client ID (leave empty to use the built-in one)</label>
+        <input id="clientId" type="text" autocomplete="off" spellcheck="false">
+        <label for="clientSecret">Client Secret (optional)</label>
+        <input id="clientSecret" type="password" autocomplete="off">
+        <p class="muted">Only needed if MyAnimeList gave you one for your app type. It's only sent together with your own Client ID.</p>
+      </details>
+
+      <div class="row">
+        <button id="save" type="button" class="primary">Save</button>
+        <span id="message" role="status"></span>
+      </div>
+      <p id="error" role="alert" hidden></p>
+
+      <footer class="muted">
+        <p><a id="report" target="_blank" rel="noopener">Report a problem</a></p>
+        <p>NextEp is my own project. It isn't affiliated with or endorsed by MyAnimeList.</p>
+      </footer>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

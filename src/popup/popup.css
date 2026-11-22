@@ -1,0 +1,121 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1c1e24;
+  --muted: #5d6270;
+  --border: #c9ccd4;
+  --accent: #2e51a2;
+  --accent-fg: #ffffff;
+  --error: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f2128;
+    --fg: #e8e9ee;
+    --muted: #a0a4b0;
+    --border: #3d414d;
+    --accent: #7c9cf0;
+    --accent-fg: #11131a;
+    --error: #ff8a80;
+  }
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px system-ui, sans-serif;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+p {
+  margin: 6px 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.row > button {
+  flex: 1;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.list button {
+  text-align: left;
+}
+
+.link {
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: 13px;
+}
+
+input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+#error {
+  margin: 8px 0 0;
+  color: var(--error);
+  font-size: 13px;
+}
+
+footer {
+  margin-top: 12px;
+}
