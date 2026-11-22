@@ -8,7 +8,7 @@ NextEp is my own Firefox extension for updating your MyAnimeList episode count. 
 
 - The show name. On sites you've enabled, NextEp takes the show name from the episode page URL, and from the tab title if the site's rule uses it, and searches MyAnimeList for it, to find the right anime. Searches you type in the popup are sent the same way.
 - Your list. Using your own MyAnimeList sign-in, NextEp reads your list entry for the matched anime and updates the number of watched episodes (and the list status, like "watching" or "completed").
-- Sign-in. You sign in on MyAnimeList's own page, so NextEp never sees your password. It gets an access token and a refresh token, and exchanges and refreshes them with MyAnimeList.
+- Sign-in. You sign in on MyAnimeList's own page, so NextEp never sees your password. It gets an access token and a refresh token, and exchanges and refreshes them with MyAnimeList. Right after that it asks MyAnimeList for your username.
 
 MyAnimeList's own terms and privacy policy apply to whatever it receives.
 
@@ -18,7 +18,7 @@ Nothing goes to me or to anyone else. NextEp has no analytics or tracking and lo
 
 This is in Firefox's extension storage:
 
-- your access and refresh tokens, and when they expire
+- your access and refresh tokens, and when they expire, plus your MyAnimeList username, which I only use to show who's signed in
 - your settings: the notification preference, your site rules and, if you entered them, your own Client ID and Client Secret (the secret is stored unencrypted in extension storage)
 - show matches: for each show, the site host and the name from the URL, the matched anime and the candidate matches, and any episode waiting for confirmation
 - the last episode seen for each show, with a timestamp
