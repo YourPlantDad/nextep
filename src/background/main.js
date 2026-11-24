@@ -19,7 +19,9 @@ import { toHttpUrl, siteHost, normalizeHost, cleanHost } from "../lib/template.j
 
 const store = createStore();
 const auth = createAuth({ store });
-const api = createApi({ tokens: auth });
+// The clock is looked up on each call, so the tests can swap it out.
+const clock = () => Date.now();
+const api = createApi({ tokens: auth, now: clock });
 
 // Rules from an older version have no address template. They are removed once, when this page
 // starts. Matches and last-seen entries stay, so enabling the site again picks them up.
@@ -81,7 +83,7 @@ function onTrackerEvent(event) {
   showRecorded(event).catch(() => {});
 }
 
-const tracker = createTracker({ store, api, emit: onTrackerEvent });
+const tracker = createTracker({ store, api, emit: onTrackerEvent, now: clock });
 
 const RECORDED_GREEN = "#2e9e5b";
 
@@ -109,24 +111,44 @@ async function refreshActiveBadge() {
   if (tab?.url) await updateBadge(tab.id, tab);
 }
 
-browser.tabs.onUpdated.addListener(
-  async (tabId, changeInfo, tab) => {
-    if (!tab?.url) return;
-    try {
-      const { sites } = await store.getSettings();
-      const parsed = parseTab(tab, sites);
-      const trigger = visitTrigger(parsed, changeInfo);
-      // Pages with no episode source are only matched when the popup opens.
-      if (trigger && parsed.source !== "none") {
-        await tracker.handleVisit(parsed, trigger, { tabId, windowId: tab.windowId });
-      }
-    } catch (e) {
-      console.error("NextEp:", e);
+// After MyAnimeList refuses a request, visits are skipped for a while. When that ends, the open
+// tabs are looked at again, so a step that was skipped or failed isn't lost.
+let rescanTimer = null;
+
+function scheduleRescan() {
+  const until = api.pausedUntil();
+  if (rescanTimer || until <= clock()) return;
+  rescanTimer = setTimeout(rescanTabs, until - clock() + 1000);
+}
+
+async function rescanTabs() {
+  rescanTimer = null;
+  try {
+    const tabs = await browser.tabs.query({});
+    for (const tab of tabs.filter((t) => t.url)) await visitTab(tab.id, { status: "complete" }, tab);
+  } catch (e) {
+    console.error("NextEp:", e);
+  }
+}
+
+async function visitTab(tabId, changeInfo, tab) {
+  if (!tab?.url) return;
+  try {
+    const { sites } = await store.getSettings();
+    const parsed = parseTab(tab, sites);
+    const trigger = visitTrigger(parsed, changeInfo);
+    // Pages with no episode source are only matched when the popup opens.
+    if (trigger && parsed.source !== "none") {
+      await tracker.handleVisit(parsed, trigger, { tabId, windowId: tab.windowId });
     }
-    await updateBadge(tabId, tab).catch(() => {});
-  },
-  { properties: ["url", "title", "status"] },
-);
+  } catch (e) {
+    console.error("NextEp:", e);
+  }
+  scheduleRescan();
+  await updateBadge(tabId, tab).catch(() => {});
+}
+
+browser.tabs.onUpdated.addListener(visitTab, { properties: ["url", "title", "status"] });
 
 // Every open tab, for changes that affect all of them (sign-in and settings).
 async function refreshAllBadges() {

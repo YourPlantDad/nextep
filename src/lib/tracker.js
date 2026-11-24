@@ -226,6 +226,8 @@ export function createTracker({ store, api, emit: rawEmit = () => {}, now = Date
   // trigger says what changed: "url" is a bare address change, "title" is a loaded or
   // changed title. The tab title is still the old page's right after an address change.
   async function visit(parsed, trigger = "title", context) {
+    // MyAnimeList refused a request a moment ago. Only this automatic path waits.
+    if (now() < api.pausedUntil()) return;
     const { slug, key, titleName, source } = parsed;
     if (source === "none") {
       // Nothing to count. Just make sure the show has a mapping.

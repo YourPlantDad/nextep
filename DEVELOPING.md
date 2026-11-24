@@ -45,6 +45,12 @@ When a rule has both an address and a title template, the address number wins. T
 
 Matching a page to an anime uses the address slug. A slug often ends in a site ID (`jujutsu-kaisen-2nd-season-78067`), but a real title can also end in a number (`mob-psycho-100`). The tracker searches MyAnimeList with the full slug first, then again without the last piece if that piece has a digit or an underscore. It only accepts a result on its own when exactly one entry has a title, English title or synonym that equals the search text after normalizing (case, punctuation and diacritics ignored). If the rule has a title template and the title matches, the show name from the title goes first, but only if it shares a word of three or more letters with the slug. A third guess, the slug without its last two pieces, only fills the candidate list. Long titles are cut to 64 characters for the search, and the comparison uses the whole text.
 
+## When MyAnimeList refuses requests
+
+MyAnimeList publishes no rate limits, and its API reference lists 403 as "DoS detected etc.". All users share one Client ID, so NextEp backs off. `createApi` in `src/lib/mal-api.js` counts a refusal when MyAnimeList answers 403, 429 or 500 and above, or when the token calls fail with one of those. A network error with no status doesn't count, because nothing reached MyAnimeList. After a refusal `api.pausedUntil()` is a minute away, then 2, 4, 8 and 16 minutes, and never more than 30. Any other answer from MyAnimeList clears the wait.
+
+Only the visits that tab events start wait. `visit` in `tracker.js` returns at once during a wait, and everything the popup does goes through. `main.js` sets one timer for the end of the wait and then looks at all open tabs again, so a step that was skipped or failed isn't lost. If MyAnimeList refuses again, the next wait is longer, so a long block costs one request per wait.
+
 ## Using your own MyAnimeList API client
 
 The Client ID in `src/lib/config.js` belongs to the published add-on. A fork should use its own Client ID and its own add-on ID, because the sign-in redirect address depends on the add-on ID.

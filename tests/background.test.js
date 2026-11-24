@@ -24,7 +24,9 @@ const CROSS_CHECK_RULE = {
 };
 
 const watchUrl = (n) => `https://${HOST}/watch/my-show/ep-${n}`;
-const settle = () => new Promise((r) => setTimeout(r, 15));
+// The real setTimeout, because some tests replace the global one with a fake clock.
+const realSetTimeout = globalThis.setTimeout;
+const settle = () => new Promise((r) => realSetTimeout(r, 15));
 
 let loads = 0;
 
@@ -33,7 +35,7 @@ async function boot({ anime, sites = [ADDRESS_RULE], settings = {}, storage = {}
   const base = {
     settings: { openOnRecord: true, sites, ...settings },
     ...(signedIn
-      ? { auth: { accessToken: "token", refreshToken: "refresh", expiresAt: Date.now() + 30 * 24 * 3600 * 1000 } }
+      ? { auth: { accessToken: "token", refreshToken: "refresh", expiresAt: Date.now() + 30 * 24 * 3600 * 1000, obtainedAt: Date.now() } }
       : {}),
     ...storage,
   };
@@ -306,7 +308,8 @@ test("a failed update keeps the step, so the next event for the page records it"
   const tab = page(watchUrl(5));
   const env = await boot({ tabs: [tab], settings: { openOnRecord: false } });
   await env.tabEvent(1, { url: watchUrl(4) }, page(watchUrl(4)));
-  env.mal.failNext("PATCH", /my_list_status$/, 500);
+  // A 400 isn't a refusal, so nothing waits and the next event tries again.
+  env.mal.failNext("PATCH", /my_list_status$/, 400);
   const log = console.error;
   console.error = () => {};
   try {
@@ -322,8 +325,10 @@ test("a failed update keeps the step, so the next event for the page records it"
   assert.equal(env.data.lastSeen[KEY].episode, 5);
 });
 
-test("a failed first visit leaves no last-seen entry behind", async () => {
+test("a failed first visit leaves no last-seen entry behind", async (t) => {
   const env = await boot();
+  // The 500 starts a wait and a rescan timer, which the fake clock keeps from running for real.
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   env.mal.failNext("GET", /\/v2\/anime$/, 500);
   const log = console.error;
   console.error = () => {};
@@ -583,4 +588,82 @@ test("other search errors keep their text", async () => {
   const res = await env.send({ type: "search", query: "x" });
   assert.equal(res.ok, false);
   assert.match(res.error, /API error 500/);
+});
+
+// MyAnimeList refuses a request, so automatic visits wait. A fake clock makes the wait instant.
+const MINUTE = 60 * 1000;
+const apiRequests = (env) => env.mal.requests.filter((r) => r.url.startsWith("https://api.myanimelist.net/"));
+
+async function quietly(fn) {
+  const log = console.error;
+  console.error = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.error = log;
+  }
+}
+
+test("after MyAnimeList answers 403, another tab event on the same page makes no request", async (t) => {
+  const tab = page(watchUrl(1));
+  const env = await boot({ tabs: [tab] });
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  env.mal.failNext("GET", /\/v2\/anime$/, 403);
+  await quietly(() => env.tabEvent(1, { url: watchUrl(1) }, tab));
+  const before = apiRequests(env).length;
+  assert.equal(before, 1);
+  await env.tabEvent(1, { status: "complete" }, tab);
+  assert.equal(apiRequests(env).length, before);
+});
+
+test("when the wait ends, open tabs are looked at again and the step goes through", async (t) => {
+  const tab = page(watchUrl(4));
+  const env = await boot({ tabs: [tab], settings: { openOnRecord: false } });
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await env.tabEvent(1, { url: watchUrl(4) }, tab);
+  tab.url = watchUrl(5);
+  env.mal.failNext("GET", /\/v2\/anime\/1$/, 403);
+  await quietly(() => env.tabEvent(1, { url: watchUrl(5) }, tab));
+  assert.equal(env.mal.patches().length, 0);
+
+  t.mock.timers.tick(MINUTE + 1000);
+  await settle();
+  const patches = env.mal.patches();
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].form.num_watched_episodes, "4");
+  assert.equal(env.data.lastSeen[KEY].episode, 5);
+});
+
+test("a second refusal after the rescan waits twice as long, with one request per wait", async (t) => {
+  const tab = page(watchUrl(1));
+  const env = await boot({ tabs: [tab] });
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  env.mal.failNext("GET", /\/v2\/anime$/, 403);
+  env.mal.failNext("GET", /\/v2\/anime$/, 403);
+  await quietly(() => env.tabEvent(1, { url: watchUrl(1) }, tab));
+  t.mock.timers.tick(MINUTE + 1000);
+  await quietly(settle);
+  assert.equal(apiRequests(env).length, 2);
+
+  // The second wait is two minutes, so a minute later nothing has happened yet.
+  t.mock.timers.tick(MINUTE + 1000);
+  await settle();
+  assert.equal(apiRequests(env).length, 2);
+  t.mock.timers.tick(MINUTE + 1000);
+  await settle();
+  assert.ok(apiRequests(env).length > 2);
+  assert.ok(env.data.mappings?.[KEY], "the show is matched once MyAnimeList answers");
+});
+
+test("popup messages still reach MyAnimeList during a wait", async (t) => {
+  const tab = page(watchUrl(1));
+  const env = await boot({ tabs: [tab] });
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  env.mal.failNext("GET", /\/v2\/anime$/, 403);
+  await quietly(() => env.tabEvent(1, { url: watchUrl(1) }, tab));
+  const before = apiRequests(env).length;
+  const res = await env.send({ type: "search", query: "my show" });
+  assert.equal(res.ok, true);
+  assert.equal(res.results[0].id, 1);
+  assert.equal(apiRequests(env).length, before + 1);
 });
