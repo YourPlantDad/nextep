@@ -8,6 +8,6 @@
     "test": "node --test \"tests/*.test.js\""
   },
   "webExt": {
-    "ignoreFiles": ["tests", "package.json", "README.md", "DEVELOPING.md", "PRIVACY.md", "SECURITY.md"]
+    "ignoreFiles": ["tests", "docs", "package.json", "README.md", "DEVELOPING.md", "PRIVACY.md", "SECURITY.md"]
   }
 }

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NextEp demo</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<main>
+<h1>NextEp demo</h1>
+<p>This is a small site for trying <a href="https://github.com/YourPlantDad/nextep">NextEp</a>, a Firefox extension that keeps your MyAnimeList up to date while you watch. There is no video here. The pages only have addresses and tab titles that look like the ones on a streaming site, and that is all NextEp reads.</p>
+<p>NextEp changes your real MyAnimeList list for these two anime, Death Parade and Cowboy Bebop. To undo it, use the <code>−1</code> button in the popup, or "Remove from your list…" in the status menu.</p>
+
+<h2>1. Quick try</h2>
+<p>The episode number is in the address, so one click is enough.</p>
+<ol>
+<li>Sign in to MyAnimeList in NextEp's settings.</li>
+<li>Open <a href="watch/death-parade/ep-1/">Death Parade, episode 1</a>.</li>
+<li>Click the NextEp toolbar button, then "Enable on yourplantdad.github.io".</li>
+<li>Click "Next episode".</li>
+<li>NextEp records episode 1. The toolbar button shows a check mark and the popup opens for a moment.</li>
+</ol>
+<p>Death Parade has 12 episodes. On <a href="watch/death-parade/ep-12/">episode 12</a>, the last one, the popup offers "Mark as completed".</p>
+
+<h2>2. A site that has to be taught</h2>
+<p>Here the address holds a number that is not the episode, and only the tab title has the episode. NextEp has to be shown two pages first.</p>
+<ol>
+<li>Open <a href="player/cowboy-bebop-1/?ep=4103">Cowboy Bebop, episode 1</a>.</li>
+<li>Click the NextEp toolbar button, then "This is episode 1".</li>
+<li>Open <a href="player/cowboy-bebop-1/?ep=4106">episode 2</a>, click the toolbar button, then "This is episode 2".</li>
+<li>From then on, going to the next episode records the previous one.</li>
+</ol>
+<p>NextEp keeps one rule per website, and both demos are on the same website. Teaching this one replaces the rule from the quick try.</p>
+</main>
+</body>
+</html>
