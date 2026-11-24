@@ -15,11 +15,14 @@ NextEp remembers the last episode you opened for each show. When a page goes fro
 - The status is set to "watching" if the anime isn't on your list yet or is on plan to watch. It's set to "completed" when the count reaches the total number of episodes.
 - If the anime is on hold or dropped, NextEp doesn't change that. It remembers the highest episode it would have recorded, and the popup offers a button to pick the show back up.
 - If the episode number is higher than MyAnimeList's total, nothing is written. The site probably numbers episodes differently.
+- NextEp doesn't run in private windows.
 - If MyAnimeList refuses requests or has trouble, NextEp waits before it tries again by itself, a minute at first and up to half an hour. The popup buttons keep working.
 
 ## Installing
 
-NextEp isn't on addons.mozilla.org yet. Until it is, you install the file that Mozilla signed from the [latest release](https://github.com/YourPlantDad/nextep/releases/latest).
+NextEp needs Firefox 140 or later.
+
+It isn't on addons.mozilla.org yet. Until it is, you install the file that Mozilla signed from the [latest release](https://github.com/YourPlantDad/nextep/releases/latest).
 
 1. Open the release page in Firefox and click the `.xpi` file under "Assets".
 2. Firefox asks if you want to add NextEp. Click "Add". If Firefox saves the file instead, drag it into a Firefox window.
@@ -30,7 +33,7 @@ To run it from the source files instead, see [DEVELOPING.md](DEVELOPING.md).
 
 ## Getting started
 
-1. Open NextEp's settings (the "Open settings" button or the "Settings" link in the popup, or its entry in `about:addons`) and click "Sign in to MyAnimeList".
+1. Open NextEp's settings (the "Open settings" button or the "Settings" link in the popup, or its entry in `about:addons`) and click "Sign in".
 2. Open an episode page on your streaming site.
 3. Click the NextEp toolbar button. If the page's address looks like `.../<slug>/ep-<n>` or `.../<slug>/episode-<n>`, click "Enable on <host>". Otherwise teach NextEp the site (see below).
 4. Watch. When you move on to the next episode, the previous one gets recorded.
