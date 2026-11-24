@@ -1,0 +1,66 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --text: #1c1c1e;
+  --muted: #5c5c63;
+  --link: #0a5bd3;
+  --line: #d6d6db;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --text: #ececf0;
+    --muted: #a3a3ad;
+    --link: #7db2ff;
+    --line: #34343b;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 1.0625rem/1.6 system-ui, sans-serif;
+}
+
+main {
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+h1 {
+  font-size: 1.75rem;
+  line-height: 1.25;
+}
+
+h2 {
+  margin-top: 2rem;
+  font-size: 1.25rem;
+}
+
+a {
+  color: var(--link);
+}
+
+.episode {
+  font-size: 1.25rem;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.note {
+  color: var(--muted);
+}
+
+li {
+  margin-bottom: 0.5rem;
+}

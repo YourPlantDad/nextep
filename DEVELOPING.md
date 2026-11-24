@@ -20,6 +20,7 @@ A build without a Client ID in `src/lib/config.js` can't sign in. See [Using you
 - `src/options/` is the settings page.
 - `src/lib/` holds the logic that can be pure, so it runs in Node. Rules and templates are in `template.js`, `url-parser.js`, `learn.js` and `one-click.js`. MyAnimeList access is in `oauth.js` and `mal-api.js`. Episode tracking is in `tracker.js` and `progress.js`. `config.js` holds the Client ID.
 - `tests/` has the unit tests, and `tests/helpers/fakes.js` has a fake `browser` and a fake MyAnimeList for loading `main.js` in Node.
+- `docs/` is the demo site that GitHub Pages serves at <https://yourplantdad.github.io/nextep/>. It has no video, only pages with episode addresses and tab titles. Death Parade has the episode in the address (`watch/death-parade/ep-<n>/`). Cowboy Bebop has it only in the tab title (`player/cowboy-bebop-1/?ep=<id>`). `tests/demo.test.js` checks both shapes against the learner.
 - `.github/` has the CI workflow and the issue forms.
 
 ## Tests and lint
@@ -68,4 +69,4 @@ If `BUILT_IN_CLIENT_ID` is empty, sign-in fails with "This build has no MyAnimeL
 npx --yes web-ext build
 ```
 
-This makes a zip in `web-ext-artifacts/`. Upload it to addons.mozilla.org for signing. The `webExt.ignoreFiles` list in `package.json` leaves out the tests and the Markdown files.
+This makes a zip in `web-ext-artifacts/`. Upload it to addons.mozilla.org for signing. The `webExt.ignoreFiles` list in `package.json` leaves out the tests, the demo site in `docs/` and the Markdown files.

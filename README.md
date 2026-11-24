@@ -30,6 +30,8 @@ NextEp isn't on addons.mozilla.org yet. For now you load it from the source file
 
 No site is enabled by default.
 
+If you want to try NextEp first, there's a demo site at <https://yourplantdad.github.io/nextep/>. It has episode pages and no video.
+
 ## Teaching a website
 
 If "Enable on <host>" isn't offered, teach NextEp the site with two example pages.
