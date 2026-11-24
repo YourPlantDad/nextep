@@ -48,7 +48,9 @@ function setup({ searchResults = {}, anime = {}, signedIn = true } = {}) {
   const removals = [];
   const searches = [];
   const events = [];
+  const pause = { until: 0 };
   const api = {
+    pausedUntil: () => pause.until,
     async search(q) {
       searches.push(q);
       const r = searchResults[q] ?? [];
@@ -67,7 +69,7 @@ function setup({ searchResults = {}, anime = {}, signedIn = true } = {}) {
     },
   };
   const tracker = createTracker({ store, api, emit: async (e) => events.push(e), now: () => 42 });
-  return { store, tracker, patches, removals, searches, events };
+  return { store, tracker, patches, removals, searches, events, pause };
 }
 
 const jjkEnv = (listStatus) =>
@@ -704,4 +706,31 @@ test("removeFromList calls the API once and clears the cached list state", async
   assert.equal(m.pausedEpisode, undefined);
   assert.equal(m.malId, 51009);
   assert.equal(m.confirmed, true);
+});
+
+test("a visit while MyAnimeList is refusing makes no API call and leaves lastSeen alone", async () => {
+  const env = jjkEnv();
+  await env.tracker.handleVisit(visit(JJK, 4));
+  env.pause.until = 100;
+  env.searches.length = 0;
+  await env.tracker.handleVisit(visit(JJK, 5));
+  assert.deepEqual(env.searches, []);
+  assert.deepEqual(env.patches, []);
+  assert.equal((await env.store.getLastSeen(`example.tv|${JJK}`)).episode, 4);
+});
+
+test("a visit goes through again once the pause is over", async () => {
+  const env = jjkEnv({ status: "watching", num_episodes_watched: 2 });
+  await env.tracker.handleVisit(visit(JJK, 4));
+  env.pause.until = 42;
+  await env.tracker.handleVisit(visit(JJK, 5));
+  assert.equal(env.patches.length, 1);
+});
+
+test("applyProgress from the popup still calls the API during a pause", async () => {
+  const env = jjkEnv({ status: "watching", num_episodes_watched: 2 });
+  env.pause.until = 100;
+  await env.tracker.applyProgress(51009, 6, { silent: true });
+  assert.equal(env.patches.length, 1);
+  assert.equal(env.patches[0].body.num_watched_episodes, 6);
 });

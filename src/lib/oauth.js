@@ -5,7 +5,11 @@ export const TOKEN_URL = "https://myanimelist.net/v1/oauth2/token";
 
 const USER_URL = "https://api.myanimelist.net/v2/users/@me";
 const CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-const REFRESH_WINDOW_MS = 24 * 60 * 60 * 1000;
+// MAL says a token can be refreshed anytime, so a weekly refresh keeps the sign-in from lapsing.
+const MAX_TOKEN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_TIME_LEFT_MS = 5 * 60 * 1000;
+// After a refresh fails for a temporary reason, getAccessToken leaves MAL alone for a while.
+const RETRY_HOLD_MS = 10 * 60 * 1000;
 
 export class AuthError extends Error {
   constructor(message) {
@@ -67,6 +71,7 @@ function toAuth(json, now) {
     accessToken: json.access_token,
     refreshToken: json.refresh_token,
     expiresAt: now() + json.expires_in * 1000,
+    obtainedAt: now(),
   };
 }
 
@@ -91,6 +96,7 @@ export function createAuth({
 }) {
   const getIdentity = () => identity ?? browser.identity;
   let inflight = null;
+  let holdUntil = 0;
 
   async function doRefresh() {
     const auth = await store.getAuth();
@@ -104,6 +110,7 @@ export function createAuth({
       const next = toAuth(json, now);
       if (auth.name) next.name = auth.name;
       await store.setAuth(next);
+      holdUntil = 0;
       return next.accessToken;
     } catch (e) {
       if (e.status === 400 || e.status === 401) {
@@ -125,12 +132,16 @@ export function createAuth({
   async function getAccessToken() {
     const auth = await store.getAuth();
     if (!auth?.accessToken) throw new AuthError("Not signed in.");
-    if (auth.expiresAt - now() > REFRESH_WINDOW_MS) return auth.accessToken;
+    // A record from before obtainedAt was stored counts as due.
+    const fresh = auth.obtainedAt != null && now() - auth.obtainedAt < MAX_TOKEN_AGE_MS;
+    if (fresh && auth.expiresAt - now() > MIN_TIME_LEFT_MS) return auth.accessToken;
+    if (auth.expiresAt > now() && now() < holdUntil) return auth.accessToken;
     try {
       return await refresh();
     } catch (e) {
       // A temporary failure shouldn't block a token that hasn't expired yet.
       if (e instanceof AuthError || auth.expiresAt <= now()) throw e;
+      holdUntil = now() + RETRY_HOLD_MS;
       return auth.accessToken;
     }
   }

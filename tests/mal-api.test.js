@@ -125,3 +125,105 @@ test("removeStatus does 401 -> refresh -> retry", async () => {
   assert.deepEqual(seen, ["Bearer old", "Bearer new"]);
   assert.equal(tokens.refreshes, 1);
 });
+
+const MINUTE = 60 * 1000;
+
+function pausing(status, extra = {}) {
+  const clock = { t: 1000 };
+  const state = { status };
+  const api = createApi({
+    tokens: extra.tokens ?? makeTokens(),
+    fetch: async () => res(state.status, { id: 1 }),
+    now: () => clock.t,
+  });
+  const hit = () => api.details(1, "x").catch(() => {});
+  return { api, clock, state, hit };
+}
+
+test("each refusal doubles the wait, up to 30 minutes", async () => {
+  const { api, clock, hit } = pausing(403);
+  assert.equal(api.pausedUntil(), 0);
+  for (const minutes of [1, 2, 4, 8, 16, 30, 30]) {
+    await hit();
+    assert.equal(api.pausedUntil(), clock.t + minutes * MINUTE);
+    clock.t = api.pausedUntil();
+  }
+});
+
+test("429 and 5xx statuses pause too", async () => {
+  for (const status of [429, 500, 503]) {
+    const { api, clock, hit } = pausing(status);
+    await hit();
+    assert.equal(api.pausedUntil(), clock.t + MINUTE, String(status));
+  }
+});
+
+test("pausedUntil is 0 again once the wait has passed", async () => {
+  const { api, clock, hit } = pausing(403);
+  await hit();
+  clock.t += MINUTE;
+  assert.equal(api.pausedUntil(), 0);
+});
+
+test("a normal answer resets the count and clears the pause", async () => {
+  const { api, clock, state, hit } = pausing(403);
+  await hit();
+  clock.t = api.pausedUntil();
+  await hit();
+  state.status = 200;
+  await hit();
+  assert.equal(api.pausedUntil(), 0);
+  state.status = 403;
+  await hit();
+  assert.equal(api.pausedUntil(), clock.t + MINUTE);
+});
+
+test("a 400 or a 404 does not pause and clears an earlier pause", async () => {
+  for (const status of [400, 404]) {
+    const { api, state, hit } = pausing(403);
+    await hit();
+    assert.ok(api.pausedUntil() > 0);
+    state.status = status;
+    await hit();
+    assert.equal(api.pausedUntil(), 0, String(status));
+  }
+});
+
+test("a network error does not pause", async () => {
+  const api = createApi({
+    tokens: makeTokens(),
+    fetch: async () => {
+      throw new TypeError("network");
+    },
+    now: () => 1000,
+  });
+  await assert.rejects(api.details(1, "x"), TypeError);
+  assert.equal(api.pausedUntil(), 0);
+});
+
+test("a refusal status thrown by the token provider pauses", async () => {
+  for (const method of ["getAccessToken", "refresh"]) {
+    const tokens = makeTokens();
+    tokens[method] = async () => {
+      throw Object.assign(new Error("Token request failed."), { status: 503 });
+    };
+    // For refresh, the first answer has to be a 401 so a refresh is tried.
+    const api = createApi({
+      tokens,
+      fetch: async () => res(401),
+      now: () => 1000,
+    });
+    await assert.rejects(api.details(1, "x"), (e) => e.status === 503);
+    assert.equal(api.pausedUntil(), 1000 + MINUTE, method);
+  }
+});
+
+test("a token provider error with no status does not pause", async () => {
+  const tokens = makeTokens();
+  tokens.getAccessToken = async () => {
+    throw new AuthError("Not signed in.");
+  };
+  const api = createApi({ tokens, fetch: async () => res(200), now: () => 1000 });
+  await assert.rejects(api.details(1, "x"), AuthError);
+  assert.equal(api.pausedUntil(), 0);
+});

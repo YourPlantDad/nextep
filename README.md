@@ -15,6 +15,7 @@ NextEp remembers the last episode you opened for each show. When a page goes fro
 - The status is set to "watching" if the anime isn't on your list yet or is on plan to watch. It's set to "completed" when the count reaches the total number of episodes.
 - If the anime is on hold or dropped, NextEp doesn't change that. It remembers the highest episode it would have recorded, and the popup offers a button to pick the show back up.
 - If the episode number is higher than MyAnimeList's total, nothing is written. The site probably numbers episodes differently.
+- If MyAnimeList refuses requests or has trouble, NextEp waits before it tries again by itself, a minute at first and up to half an hour. The popup buttons keep working.
 
 ## Installing
 
