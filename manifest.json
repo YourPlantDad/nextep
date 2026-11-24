@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "NextEp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Updates your MyAnimeList watched-episode count when you go from one episode to the next.",
   "homepage_url": "https://github.com/YourPlantDad/nextep",
   "browser_specific_settings": {
