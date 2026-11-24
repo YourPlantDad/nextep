@@ -231,9 +231,6 @@ $("auth").addEventListener("click", (e) =>
     if (signedIn) {
       await send({ type: "signOut" });
     } else {
-      // Sign-in reads settings from storage, so save the form first.
-      const saved = await save();
-      if (!saved.ok) return saved;
       const res = await send({ type: "signIn" });
       if (!res.ok) return res;
     }
