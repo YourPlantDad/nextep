@@ -19,7 +19,14 @@ NextEp remembers the last episode you opened for each show. When a page goes fro
 
 ## Installing
 
-NextEp isn't on addons.mozilla.org yet. For now you load it from the source files, which [DEVELOPING.md](DEVELOPING.md) explains.
+NextEp isn't on addons.mozilla.org yet. Until it is, you install the file that Mozilla signed from the [latest release](https://github.com/YourPlantDad/nextep/releases/latest).
+
+1. Open the release page in Firefox and click the `.xpi` file under "Assets".
+2. Firefox asks if you want to add NextEp. Click "Add". If Firefox saves the file instead, drag it into a Firefox window.
+
+Installed this way, NextEp doesn't update by itself. For a newer version you install the file from the newest release the same way. Your sign-in and settings stay.
+
+To run it from the source files instead, see [DEVELOPING.md](DEVELOPING.md).
 
 ## Getting started
 
