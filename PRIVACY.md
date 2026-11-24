@@ -1,6 +1,6 @@
 # NextEp privacy policy
 
-Date: 2026-11-22
+Date: 2026-11-24
 
 NextEp is my own Firefox extension for updating your MyAnimeList episode count. I don't get any of your data. There's no server.
 
@@ -18,7 +18,7 @@ Nothing goes to me or to anyone else. NextEp has no analytics or tracking and lo
 
 This is in Firefox's extension storage:
 
-- your access and refresh tokens, and when they expire, plus your MyAnimeList username, which is only used to show who's signed in
+- your access and refresh tokens, and when they were issued and when they expire, plus your MyAnimeList username, which is only used to show who's signed in
 - your settings: whether the popup opens when an episode is recorded, and your site rules
 - show matches: for each show, the site host and the name from the URL, the matched anime and the candidate matches, and any episode waiting for confirmation
 - the last episode seen for each show, with a timestamp, and the last episode recorded to your list, with a timestamp

@@ -92,6 +92,7 @@ test("code exchange sends the Client ID and no secret", async () => {
     accessToken: "A2",
     refreshToken: "R2",
     expiresAt: 1000 + 2592000 * 1000,
+    obtainedAt: 1000,
   });
 });
 
@@ -145,7 +146,7 @@ test("refresh failing with 400 clears auth and throws AuthError", async () => {
 
 test("token far from expiry is returned without refreshing", async () => {
   const store = createStore(
-    memoryArea({ auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000 } }),
+    memoryArea({ auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000, obtainedAt: 0 } }),
   );
   const auth = createAuth({
     store,
@@ -263,7 +264,7 @@ test("signIn still succeeds when the user call fails", async () => {
 
 test("getUserName fetches a missing name once and stores it", async () => {
   const { store, calls, auth } = userEnv({
-    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000 },
+    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000, obtainedAt: 0 },
     userResponse: async () => okResponse({ name: "Kira" }),
   });
   assert.equal(await auth.getUserName(), "Kira");
@@ -276,7 +277,7 @@ test("getUserName never throws and returns null when signed out or failing", asy
   const signedOut = userEnv({ userResponse: async () => okResponse({ name: "Kira" }) });
   assert.equal(await signedOut.auth.getUserName(), null);
   const failing = userEnv({
-    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000 },
+    auth: { accessToken: "A1", refreshToken: "R1", expiresAt: 10 * 86400 * 1000, obtainedAt: 0 },
     userResponse: async () => {
       throw new TypeError("network");
     },
@@ -293,4 +294,115 @@ test("a token refresh keeps the stored name", async () => {
   const record = await store.getAuth();
   assert.equal(record.accessToken, "A2");
   assert.equal(record.name, "Kira");
+});
+
+const DAY = 86400 * 1000;
+
+// A signed-in store at time 100 days, with the tokens obtained and expiring as given.
+function ageEnv({ obtainedAt, expiresAt, fetch }) {
+  const auth = { accessToken: "A1", refreshToken: "R1", expiresAt };
+  if (obtainedAt !== undefined) auth.obtainedAt = obtainedAt;
+  const store = createStore(memoryArea({ auth }));
+  const requests = [];
+  const wrapped = async (...args) => {
+    requests.push(args);
+    return fetch ? fetch(...args) : okResponse(tokenJson);
+  };
+  return { store, requests, auth: createAuth({ store, fetch: wrapped, now: () => 100 * DAY }) };
+}
+
+test("a token obtained under a week ago is returned without a token request", async () => {
+  const { auth, requests } = ageEnv({ obtainedAt: 94 * DAY, expiresAt: 120 * DAY });
+  assert.equal(await auth.getAccessToken(), "A1");
+  assert.equal(requests.length, 0);
+});
+
+test("a token obtained 8 days ago is refreshed even with weeks left", async () => {
+  const { auth, requests } = ageEnv({ obtainedAt: 92 * DAY, expiresAt: 125 * DAY });
+  assert.equal(await auth.getAccessToken(), "A2");
+  assert.equal(requests.length, 1);
+});
+
+test("a token with under 5 minutes left is refreshed even if obtained recently", async () => {
+  const { auth, requests } = ageEnv({ obtainedAt: 100 * DAY - 1000, expiresAt: 100 * DAY + 4 * 60 * 1000 });
+  assert.equal(await auth.getAccessToken(), "A2");
+  assert.equal(requests.length, 1);
+});
+
+test("a stored record without obtainedAt is refreshed", async () => {
+  const { auth, requests } = ageEnv({ expiresAt: 125 * DAY });
+  assert.equal(await auth.getAccessToken(), "A2");
+  assert.equal(requests.length, 1);
+});
+
+test("a refreshed record has obtainedAt set", async () => {
+  const { auth, store } = ageEnv({ obtainedAt: 92 * DAY, expiresAt: 125 * DAY });
+  await auth.getAccessToken();
+  assert.equal((await store.getAuth()).obtainedAt, 100 * DAY);
+});
+
+test("a temporary refresh failure still returns the old token while it hasn't expired", async () => {
+  const { auth, store } = ageEnv({
+    obtainedAt: 92 * DAY,
+    expiresAt: 125 * DAY,
+    fetch: async () => ({ ok: false, status: 503 }),
+  });
+  assert.equal(await auth.getAccessToken(), "A1");
+  assert.equal((await store.getAuth()).accessToken, "A1");
+});
+
+// Like ageEnv, but time can move and the token request can be made to fail.
+function holdEnv({ expiresAt = 125 * DAY } = {}) {
+  const clock = { t: 100 * DAY };
+  const state = { fail: true };
+  const store = createStore(
+    memoryArea({ auth: { accessToken: "A1", refreshToken: "R1", expiresAt, obtainedAt: 92 * DAY } }),
+  );
+  const requests = [];
+  const fetch = async (...args) => {
+    requests.push(args);
+    return state.fail ? { ok: false, status: 503 } : okResponse(tokenJson);
+  };
+  return { clock, state, store, requests, auth: createAuth({ store, fetch, now: () => clock.t }) };
+}
+
+test("after a temporary refresh failure, getAccessToken waits 10 minutes before asking again", async () => {
+  const { auth, clock, requests } = holdEnv();
+  assert.equal(await auth.getAccessToken(), "A1");
+  assert.equal(requests.length, 1);
+  clock.t += 9 * 60 * 1000;
+  assert.equal(await auth.getAccessToken(), "A1");
+  assert.equal(requests.length, 1);
+  clock.t += 2 * 60 * 1000;
+  assert.equal(await auth.getAccessToken(), "A1");
+  assert.equal(requests.length, 2);
+});
+
+test("a direct refresh during the hold still makes a request", async () => {
+  const { auth, state, requests } = holdEnv();
+  await auth.getAccessToken();
+  state.fail = false;
+  assert.equal(await auth.refresh(), "A2");
+  assert.equal(requests.length, 2);
+});
+
+test("an expired token during the hold still tries", async () => {
+  const { auth, clock, requests } = holdEnv({ expiresAt: 100 * DAY + 60 * 1000 });
+  assert.equal(await auth.getAccessToken(), "A1");
+  clock.t += 2 * 60 * 1000;
+  await assert.rejects(auth.getAccessToken());
+  assert.equal(requests.length, 2);
+});
+
+test("a successful refresh clears the hold", async () => {
+  const { auth, state, store, clock, requests } = holdEnv();
+  await auth.getAccessToken();
+  state.fail = false;
+  await auth.refresh();
+  // Pretend the new token is due again right away.
+  await store.setAuth({ accessToken: "A2", refreshToken: "R2", expiresAt: 125 * DAY, obtainedAt: 80 * DAY });
+  state.fail = true;
+  clock.t += 1000;
+  await auth.getAccessToken();
+  assert.equal(requests.length, 3);
 });
